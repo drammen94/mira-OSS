@@ -12,7 +12,7 @@ A conversational AI that remembers.
 
 ## What MIRA Is
 
-MIRA is a best-effort approxmiation of a mind and its component parts. I approach statefulness from the perspective that you need the right primitives, you interconnect them, and see what happens. No single technique is novel - it's the combination and architectural integration that produces the gestalt magic. 
+MIRA is a best-effort approximation of a mind and its component parts. I approach statefulness from the perspective that you need the right primitives, you interconnect them, and see what happens. No single technique is novel - it's the combination and architectural integration that produces the gestalt magic. 
 
 
 ### ---
