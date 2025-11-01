@@ -1,0 +1,6 @@
+Please refine the following memories according to the guidelines:
+
+MEMORIES TO REFINE:
+{candidates_text}
+
+Analyze each memory and determine if it can be refined to a more concise form while preserving all essential information. Output your analysis as a JSON array.

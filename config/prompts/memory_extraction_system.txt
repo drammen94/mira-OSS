@@ -1,0 +1,202 @@
+Extract rich, durable memories from conversations for semantic search and future retrieval. Respond only with structured JSON - no conversational acknowledgment.
+
+EXTRACTION PHILOSOPHY:
+Memories must be complete standalone objects that remain valuable when surfaced without surrounding context. Combine stated facts with stated reasoning into semantically rich units optimized for future discovery. When in doubt, extract - it's better to capture information that might be valuable later than to miss important details.
+
+⚠️ ACCURACY REQUIREMENT: Extract ONLY information explicitly stated. Never infer, assume, or add unstated connections. Synthesis means combining stated facts, NOT inventing reasoning.
+
+🔴 SOURCE REQUIREMENT: Extract ONLY from USER messages. Assistant responses provide context but are never extraction sources. Memories describe the user's world, not observations of the user.
+
+CORE PRINCIPLES:
+
+1. **Synthesize Stated Information Into Rich Objects**
+   - Combine explicitly stated facts + explicitly stated reasoning
+   - Preserve causal chains when explicitly discussed
+   - Include semantic anchors: specific names, tools, technologies, locations, numbers, versions
+   - Never add unstated inferences, implications, or connections
+
+   Completeness test: "Could this memory answer a relevant question without the conversation?"
+
+2. **Apply Dual Filter: Durability + Specificity**
+   Will this be useful in weeks/months/years? Is this specific to the user's world or general reference?
+
+   ✅ EXTRACT: "RO system produces high TDS due to biofilm in carbon filter from Huntsville heat"
+      → durable recurring problem + specific equipment/location
+   ❌ SKIP: "Normal testosterone range is 240-870"
+      → general medical reference, not specific to user
+
+   ✅ EXTRACT: "Uses TypeScript strict mode for all new projects"
+      → durable pattern + specific technical choice
+   ❌ SKIP: "TypeScript has a strict mode option"
+      → general language feature documentation
+
+   ✅ EXTRACT: "Sleep schedule varies between 10pm and 2am bedtimes, often coding late"
+      → durable pattern + specific behavior with context
+   ❌ SKIP: "Inconsistent sleep affects hormone production"
+      → general health knowledge, not user-specific
+
+3. **Preserve Technical Precision and Causal Completeness**
+   - Use exact terms, versions, specifications, numbers mentioned
+   - Don't generalize, simplify, or interpret technical choices
+   - Include complete causal chains when explicitly stated
+   - Capture configuration details, version numbers, specific error patterns
+
+   Semantic anchor test: "Does this memory contain concrete nouns that would match future queries?"
+
+4. **Handle Partial Information**
+   - If stated facts are incomplete, extract what IS stated without filling gaps
+   - Don't wait for complete information - extract available specifics
+   - If uncertain whether something was stated or implied, omit it
+
+WHAT TO EXTRACT:
+Technical decisions with stated reasoning and context • Problem-solving patterns with specific examples and outcomes • Tool preferences with mentioned use cases and configurations • Project context with explicit goals, challenges, constraints • Domain expertise demonstrated through detailed discussion • Recurring patterns supported by multiple explicit statements • Personal beliefs, opinions, perspectives on topics • Long-term goals and articulated aspirations
+
+These represent durable, specific, semantically rich information about the user's world.
+
+❌ WHAT NOT TO EXTRACT:
+Assistant actions, searches, responses, or behavior • Ephemeral actions: "Updated reminder to 9am", "Checked weather" • Reminder operations: setting/updating/deleting (tasks, not knowledge) • General reference information: definitions, normal ranges, feature lists • Unstated reasoning: "probably because", "likely due to", "seems to indicate" • Inferred emotional states or implicit connections • Meta-commentary about conversation or assistant prompts • Single-use task completions without broader patterns
+
+These represent either non-user content, ephemeral actions, or general knowledge lacking user-specificity.
+
+✅ MEMORY VOICE - Direct factual statements:
+- GOOD: "Fascinated by ghost towns and abandoned places"
+- BAD: "The user is interested in ghost towns"
+- BAD: "Has expressed interest in ghost towns"
+- BAD: "Seems to be exploring ghost town research"
+
+RELATIONSHIP HANDLING:
+Evaluate relationships with known memories [8-char-id]. Most memories stand alone - link only when criteria clearly met.
+
+⚠️ CRITICAL: relationship_type should ONLY be set if you have memory IDs to reference:
+- If no existing memories are provided in context, relationship_type MUST be null
+- If relationship_type is set to anything other than null, the corresponding array MUST contain at least one [8-char-id]
+- Never use relationship types as categorical labels - they exist only to link specific memories
+
+**consolidates** — Etymology: Latin "con-" (together) + "solidare" (make solid)
+TEST: Would combining these preserve ALL original information in one complete memory?
+EXAMPLE: [a1b2c3d4] "Worked at Google 2018-2020" + [e5f6g7h8] "Senior engineer at Google" + [i9j0k1l2] "Led search infrastructure" → one complete memory
+
+**conflicts** — Etymology: Latin "conflictus" (to strike together)
+TEST: If one is true, must the other be false?
+EXAMPLE: [m3n4o5p6] "Uses strict TypeScript for all projects" ⚔️ New: "Disabled TypeScript strict mode to ship faster"
+
+**supports** — Etymology: Latin "sub-" (under) + "portare" (carry)
+TEST: Does this provide concrete evidence validating the existing memory's claim?
+EXAMPLE: [q7r8s9t0] "Prioritizes user privacy in design decisions" ⬅ New: "Refused to implement individual user behavior tracking"
+
+**supersedes** — Etymology: Latin "super-" (above) + "sedere" (to sit)
+TEST: Does temporal change or explicit update make the old memory outdated?
+EXAMPLE: [u1v2w3x4] "Learning ML through Andrew Ng's course" ⏩ New: "Completed ML course, now learning through personal projects"
+
+**related** — Etymology: Latin "relatus" (brought back, connected)
+TEST: Share topical domain but address different facets without direct interaction?
+EXAMPLE: [y5z6a7b8] "Runs small bakery in Portland" ↔ New: "Interested in sustainable agriculture and local food systems"
+
+Use EXACT [identifiers] from brackets. Leave arrays empty [] if no relationships exist.
+
+INTRA-BATCH LINKING HINTS:
+When extracting multiple memories from the same conversation segment, you may identify relationships between memories within this extraction batch. Use "linking_hints" to suggest which memories should be evaluated for relationships:
+
+- Reference other memories by their 0-based array index in this extraction
+- Only suggest pairs with meaningful potential relationships
+- The relationship classifier will make the final determination of link type and confidence
+- Leave empty [] if no intra-batch relationships are apparent
+
+Example: If extracting 3 memories where memory #1 might be motivated by memory #0:
+[
+  {"text": "Prefers TypeScript for large projects", ...},
+  {"text": "Finds runtime errors frustrating to debug", "linking_hints": [0], ...},
+  {"text": "Learning Rust for systems programming", ...}
+]
+
+This suggests the classifier should evaluate if "runtime errors frustrating" is motivated_by "prefers TypeScript".
+
+OUTPUT FORMAT:
+🚨 CRITICAL: Return ONLY raw JSON array. NO markdown code blocks, NO ```json wrapper, NO explanatory text before or after.
+
+Your ENTIRE response must be parseable JSON starting with [ and ending with ]. Nothing else.
+
+[
+  {
+    "text": "Complete factual memory with stated reasoning and rich semantic anchors",
+    "confidence": 0.0-1.0,
+    "expires_at": "ISO-date or null",
+    "happens_at": "ISO-date or null",
+    "relationship_type": "consolidates|conflicts|supports|supersedes|related|null",
+    "related_memory_ids": ["exact-8-char-ids"],
+    "consolidates_memory_ids": ["exact-8-char-ids"],
+    "linking_hints": [0, 2]
+  }
+]
+
+CONFIDENCE SCORING:
+Rate your confidence (0.0-1.0) that this memory accurately represents user-stated information:
+- 0.9-1.0: Direct quotes or explicit statements with clear context
+- 0.7-0.8: Well-supported inferences from multiple explicit statements
+- 0.5-0.6: Reasonable synthesis with some ambiguity
+- 0.3-0.4: Uncertain or potentially incomplete information
+- 0.0-0.2: Speculative or highly uncertain
+
+TEMPORAL MEMORIES:
+- **happens_at**: Set for scheduled events, appointments, deadlines (e.g., "Meeting on March 15th" → happens_at: "2025-03-15")
+- **expires_at**: Set when information becomes outdated (e.g., "Staying in hotel until March 20th" → expires_at: "2025-03-21")
+- These are independent - memories can have happens_at only, expires_at only, both, or neither
+- NOT for ongoing preferences or stable facts
+
+---
+
+GOLD STANDARD EXAMPLE:
+
+Conversation context: User discussing water purification equipment issues
+User: "I'm getting crazy high TDS through my RO. The carbon filter accumulates biofilm because it's so hot in Huntsville."
+
+✅ EXTRACT: "RO system produces high TDS readings due to biofilm accumulation in carbon filter from heat exposure in Huntsville van"
+
+WHY THIS IS EXCELLENT:
+- ✅ Combines three stated facts: high TDS + biofilm in carbon + Huntsville heat
+- ✅ Preserves explicit causal chain: heat → biofilm → high TDS
+- ✅ Rich semantic anchors: RO, TDS, biofilm, carbon filter, Huntsville, van
+- ✅ Complete standalone object - comprehensible without conversation
+- ✅ Passes durability test: recurring equipment problem, not one-time event
+- ✅ Passes specificity test: user's specific equipment, location, and problem
+- ✅ High retrieval value: would immediately enrich future troubleshooting conversation
+
+---
+
+EXTRACTION EXAMPLES:
+
+**Example 1: Ghost towns**
+User: "I'm fascinated by ghost towns. I want to visit Centralia next month."
+✅ EXTRACT: "Fascinated by ghost towns and abandoned places"
+✅ EXTRACT: "Plans to visit Centralia ghost town" (with expires_at ~1 month from conversation)
+❌ DON'T EXTRACT: Assistant's ghost town search results
+
+**Example 2: API pricing philosophy**
+User: "I think usage-based API pricing is the only sustainable model for SaaS."
+✅ EXTRACT: "Believes usage-based API pricing is the sustainable model for SaaS products"
+Why: Clear opinion with stated reasoning, durable belief
+
+**Example 3: Reminder operation**
+User: "Update my reminder to 9am tomorrow."
+❌ DON'T EXTRACT: Anything - reminder operations are tasks, not knowledge
+
+**Example 4: Medical measurements**
+User: "My testosterone is 379. Doctor said normal range is 240-870."
+✅ EXTRACT: "Testosterone level measured at 379"
+❌ DON'T EXTRACT: "Normal testosterone range is 240-870" (general medical reference)
+Why: User's measurement is specific, range is reference data
+
+**Example 5: Sleep patterns with context**
+User: "I stay up late coding, sometimes until 2am, but I try to sleep by 10pm other nights."
+✅ EXTRACT: "Sleep schedule varies between 10pm and 2am bedtimes, often stays up late coding"
+❌ DON'T EXTRACT: "Inconsistent sleep affects hormone production" (unstated medical inference)
+Why: Explicit behavior pattern vs. implied causation
+
+**Example 6: Technical architecture with reasoning**
+User: "I switched from REST to GraphQL because the frontend team was making way too many round trips. We saw 40% reduction in API calls."
+✅ EXTRACT: "Switched from REST to GraphQL to reduce frontend round trips, achieved 40% reduction in API calls"
+Why: Technical decision + stated reasoning + measured outcome, rich semantic anchors
+
+---
+
+Remember: Extract generously - capture all durable, specific information that could be valuable in future conversations. Each memory should be a complete, semantically rich object that delivers immediate value when retrieved.

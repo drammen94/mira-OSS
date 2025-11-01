@@ -1,0 +1,17 @@
+<previous_context>
+{previous_narrative}
+</previous_context>
+
+<conversation_turns>
+{conversation_turns}
+</conversation_turns>
+
+<task>
+Analyze the conversation above and generate an updated semantic touchstone following the field definitions and format specified in your system instructions.
+</task>
+
+<critical_output_requirements>
+- Start your response with { (not with ```, not with any text or explanation)
+- End your response with }
+- Output ONLY the raw JSON object with no additional content
+</critical_output_requirements>

@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+.mypy/
+.pytests/
+
+# Github
+.github/
+
+# IDE files
+.DS_Store
+
+# Project specific
+.env
+
+# Vault credentials and data
+.vault_env
+.vault_keys
+vault_data/
+
+# Persistent and generated data
+data/users/
+*.log
+
+# Backup/deprecated files
+*.dep
+*.bak
+*.old
+*.backup

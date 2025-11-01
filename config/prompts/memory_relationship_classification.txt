@@ -1,0 +1,119 @@
+Analyze the relationship between a newly extracted memory and an existing memory from the user's long-term memory system.
+
+Your task is to determine if these memories have a meaningful semantic relationship and classify it precisely.
+
+RELATIONSHIP TYPES:
+
+**conflicts** - Mutually exclusive or contradictory information
+- Different values for the same fact (e.g., "uses Python 3.9" vs "uses Python 3.11")
+- Temporal contradictions (same event, different dates/times)
+- Contradictory preferences or beliefs
+- Factual disagreements that cannot both be true
+- Decision test: If one is true, must the other be false?
+
+**supersedes** - New memory explicitly updates or replaces old information due to temporal progression
+- Temporal progression ("switched from X to Y", "now uses Z instead")
+- Explicit updates ("changed preference", "moved from A to B")
+- New information that makes old information outdated
+- Must have clear temporal or progressive relationship
+- Decision test: Does temporal progression make the old memory no longer current?
+
+**causes** - Source memory directly leads to or triggers the target memory
+- Direct causation relationships (this made that happen)
+- Cause and effect chains (server costs increased → rolled back architecture)
+- Decisions that led to actions or outcomes
+- Decision test: Did this make that happen?
+
+**instance_of** - Source memory is a specific concrete example of the general pattern in target memory
+- Concrete occurrences that exemplify abstract patterns
+- Specific examples of general principles
+- Detailed instances of broader concepts
+- Decision test: Is this a concrete occurrence that exemplifies that pattern?
+
+**invalidated_by** - Source memory's factual claims are disproven by concrete evidence in target memory
+- Empirical evidence that disproves assumptions
+- Test results that contradict expectations
+- Concrete proof that shows claims were wrong
+- Decision test: Does empirical evidence show this assumption/claim was wrong?
+
+**motivated_by** - Source memory captures the intention, reasoning, or goal behind the action/decision in target memory
+- Explains WHY decisions/actions were taken
+- Captures intent and reasoning behind choices
+- Preserves decision rationale
+- Decision test: Does this explain WHY that decision/action was taken?
+
+**null** - No meaningful relationship
+- Different topics or domains
+- Insufficient semantic overlap
+- Connection too weak or tangential
+- Default when none of the other types clearly apply
+- When in doubt, choose null
+
+CLASSIFICATION CRITERIA:
+
+1. **Semantic Similarity**: High similarity (≥0.85) is required for any relationship
+2. **Temporal Analysis**: Check happens_at/expires_at fields for temporal contradictions or progressions
+3. **Factual Consistency**: Identify if both can be simultaneously true
+4. **Specificity**: Prefer more specific relationship types over generic "related"
+5. **Confidence Threshold**: Only assign relationship if clearly justified
+
+DECISION PROCESS:
+
+1. If memories describe contradictory facts → **conflicts**
+2. If new memory explicitly updates/replaces old due to temporal progression → **supersedes**
+3. If new memory directly caused target memory to happen → **causes**
+4. If new memory is a specific example of target memory's general pattern → **instance_of**
+5. If new memory provides empirical evidence that disproves target memory → **invalidated_by**
+6. If new memory explains the reasoning/intent behind target memory → **motivated_by**
+7. If unclear or weak connection → **null**
+
+NOTE: Default to **null** when uncertain - sparse, high-confidence links are more valuable than dense, uncertain ones.
+
+OUTPUT FORMAT:
+
+Respond with valid JSON only:
+
+{
+  "relationship_type": "conflicts|supersedes|causes|instance_of|invalidated_by|motivated_by|null",
+  "confidence": 0.0-1.0,
+  "reasoning": "Brief explanation of why this relationship was chosen"
+}
+
+EXAMPLES:
+
+New: "Prefers TypeScript strict mode for all projects"
+Existing: "Disabled strict mode to ship faster"
+→ {"relationship_type": "conflicts", "confidence": 0.91, "reasoning": "Mutually exclusive approaches to TypeScript strictness"}
+
+New: "Now using PostgreSQL with pgvector for vector operations"
+Existing: "Using Pinecone for vector similarity search"
+→ {"relationship_type": "supersedes", "confidence": 0.93, "reasoning": "Temporal progression from Pinecone to PostgreSQL"}
+
+New: "Server costs increased 300% after migration"
+Existing: "Rolled back microservices architecture to monolith"
+→ {"relationship_type": "causes", "confidence": 0.89, "reasoning": "Cost increase directly caused architecture rollback"}
+
+New: "Got rate limited by OpenAI API at 3pm during batch processing of 10k requests"
+Existing: "OpenAI API has aggressive rate limits that require careful batch sizing"
+→ {"relationship_type": "instance_of", "confidence": 0.87, "reasoning": "Specific concrete example of the general rate limiting pattern"}
+
+New: "Load test measured consistent failures at 6k writes/second"
+Existing: "Database can handle 10k writes/second"
+→ {"relationship_type": "invalidated_by", "confidence": 0.94, "reasoning": "Empirical test results disprove the capacity assumption"}
+
+New: "Concerned about API abuse costs after $2k surprise bill last month"
+Existing: "Implementing comprehensive request rate limiting across all API endpoints"
+→ {"relationship_type": "motivated_by", "confidence": 0.88, "reasoning": "Explains the reasoning and intent behind the rate limiting implementation"}
+
+New: "Learning to play guitar"
+Existing: "Uses TypeScript for web development"
+→ {"relationship_type": "null", "confidence": 0.95, "reasoning": "Completely different domains with no meaningful connection"}
+
+IMPORTANT:
+- Default to **null** when uncertain - sparse, high-confidence links are better than dense, noisy ones
+- **conflicts** should only be used for direct logical contradictions
+- **supersedes** requires temporal progression, not just correction (use **invalidated_by** for evidence-based corrections)
+- **causes** requires clear cause → effect relationship, not just correlation
+- **instance_of** requires the source to be specific/concrete and target to be general/abstract
+- Confidence should reflect your certainty in the classification
+- Consider the user's perspective: would linking these memories enable useful reasoning patterns?

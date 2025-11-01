@@ -1,0 +1,8 @@
+Extract memories from this conversation chunk.
+
+{known_memories_section}
+
+CONVERSATION CHUNK:
+{formatted_messages}
+
+Extract NEW memories following all extraction principles. For relationships with existing memories, use exact [identifier] shown in brackets above.
