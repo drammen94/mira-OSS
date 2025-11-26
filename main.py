@@ -13,7 +13,8 @@ import signal
 import threading
 from contextlib import asynccontextmanager
 
-from typing import Optionalfrom pathlib import Path
+from typing import Optional
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -77,19 +78,16 @@ def ensure_single_user(app: FastAPI) -> None:
             app.state.user_email = default_email
             app.state.api_key = api_key
 
-            print(f"
-{'='*60}")
+            print(f"\n{'='*60}")
             print("MIRA Ready - Single-User OSS Mode")
             print(f"{'='*60}")
             print(f"User: {default_email}")
             print(f"API Key: {api_key}")
-            print(f"{'='*60}
-")
+            print(f"{'='*60}\n")
             return
 
         elif user_count > 1:
-            print(f"
-ERROR: Found {user_count} users")
+            print(f"\nERROR: Found {user_count} users")
             print("MIRA OSS operates in single-user mode only.")
             sys.exit(1)
 
@@ -106,13 +104,10 @@ ERROR: Found {user_count} users")
             api_key = secret_data['data']['data'].get('mira_api')
             app.state.api_key = api_key
 
-            print(f"
-MIRA Ready - User: {user['email']}
-")
+            print(f"\nMIRA Ready - User: {user['email']}\n")
         except Exception as e:
             logger.error(f"Failed to retrieve API key from Vault: {e}")
-            print("
-ERROR: Could not retrieve API key from Vault")
+            print("\nERROR: Could not retrieve API key from Vault")
             sys.exit(1)
 
 
