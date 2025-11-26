@@ -729,8 +729,7 @@ echo -e "${BOLD}${BLUE}4. Database Password${RESET} ${DIM}(OPTIONAL)${RESET}"
 print_info "Set a custom password for PostgreSQL users (mira_admin, mira_dbuser)"
 print_info "Default: 'changethisifdeployingpwd' - recommended to change for production"
 echo ""
-read -s -p "$(echo -e ${CYAN}Enter database password${RESET}) (or press Enter for default): " DB_PASSWORD_INPUT
-echo ""
+read -p "$(echo -e ${CYAN}Enter database password${RESET}) (or press Enter for default): " DB_PASSWORD_INPUT
 if [ -z "$DB_PASSWORD_INPUT" ]; then
     CONFIG_DB_PASSWORD="changethisifdeployingpwd"
     STATUS_DB_PASSWORD="${DIM}Using default password${RESET}"
@@ -1457,7 +1456,7 @@ print_header "Step 13: PostgreSQL Configuration"
 # Run schema file - single source of truth for database structure
 # Schema file creates: roles, database, extensions, tables, indexes, RLS policies
 echo -ne "${DIM}${ARROW}${RESET} Running database schema (roles, tables, indexes, RLS)... "
-SCHEMA_FILE="${MIRA_DIR}/app/deploy/mira_service_schema.sql"
+SCHEMA_FILE="/opt/mira/app/deploy/mira_service_schema.sql"
 if [ -f "$SCHEMA_FILE" ]; then
     if [ "$OS" = "linux" ]; then
         # Run as postgres superuser; schema handles CREATE DATABASE and \c
