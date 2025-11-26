@@ -44,7 +44,7 @@ BEGIN
             NOCREATEROLE
             NOREPLICATION
             NOSUPERUSER
-            PASSWORD 'new_secure_password_2024';
+            PASSWORD 'changethisifdeployingpwd';
     END IF;
 END
 $$;
@@ -59,7 +59,7 @@ BEGIN
             NOCREATEROLE
             NOREPLICATION
             NOSUPERUSER
-            PASSWORD 'new_secure_password_2024';
+            PASSWORD 'changethisifdeployingpwd';
     END IF;
 END
 $$;

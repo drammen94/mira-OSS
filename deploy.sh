@@ -474,11 +474,15 @@ vault_put_if_not_exists() {
 # Initialize configuration state (using simple variables for Bash 3.x compatibility)
 CONFIG_ANTHROPIC_KEY=""
 CONFIG_GROQ_KEY=""
+CONFIG_KAGI_KEY=""
+CONFIG_DB_PASSWORD=""
 CONFIG_INSTALL_PLAYWRIGHT=""
 CONFIG_INSTALL_SYSTEMD=""
 CONFIG_START_MIRA_NOW=""
 STATUS_ANTHROPIC=""
 STATUS_GROQ=""
+STATUS_KAGI=""
+STATUS_DB_PASSWORD=""
 STATUS_PLAYWRIGHT=""
 STATUS_SYSTEMD=""
 STATUS_MIRA_SERVICE=""
@@ -705,8 +709,39 @@ else
 fi
 echo ""
 
+# Kagi API Key (optional - for web search)
+echo -e "${BOLD}${BLUE}3. Kagi Search API Key${RESET} ${DIM}(OPTIONAL)${RESET}"
+print_info "Enables high-quality web search via Kagi's API"
+print_info "Get your key at: https://kagi.com/settings?p=api"
+echo ""
+read -p "$(echo -e ${CYAN}Enter your Kagi API key${RESET}) (or press Enter to skip): " KAGI_KEY_INPUT
+if [ -z "$KAGI_KEY_INPUT" ]; then
+    CONFIG_KAGI_KEY=""
+    STATUS_KAGI="${DIM}Skipped - web search will use fallback methods${RESET}"
+else
+    CONFIG_KAGI_KEY="$KAGI_KEY_INPUT"
+    STATUS_KAGI="${CHECKMARK} Configured"
+fi
+echo ""
+
+# Database Password (optional - defaults to changethisifdeployingpwd)
+echo -e "${BOLD}${BLUE}4. Database Password${RESET} ${DIM}(OPTIONAL)${RESET}"
+print_info "Set a custom password for PostgreSQL users (mira_admin, mira_dbuser)"
+print_info "Default: 'changethisifdeployingpwd' - recommended to change for production"
+echo ""
+read -s -p "$(echo -e ${CYAN}Enter database password${RESET}) (or press Enter for default): " DB_PASSWORD_INPUT
+echo ""
+if [ -z "$DB_PASSWORD_INPUT" ]; then
+    CONFIG_DB_PASSWORD="changethisifdeployingpwd"
+    STATUS_DB_PASSWORD="${DIM}Using default password${RESET}"
+else
+    CONFIG_DB_PASSWORD="$DB_PASSWORD_INPUT"
+    STATUS_DB_PASSWORD="${CHECKMARK} Custom password set"
+fi
+echo ""
+
 # Playwright Browser Installation (optional)
-echo -e "${BOLD}${BLUE}3. Playwright Browser Installation${RESET} ${DIM}(OPTIONAL)${RESET}"
+echo -e "${BOLD}${BLUE}5. Playwright Browser Installation${RESET} ${DIM}(OPTIONAL)${RESET}"
 print_info "Enables advanced webpage extraction for JavaScript-heavy sites"
 print_info "MIRA can function without it (basic HTTP requests still work)"
 echo ""
@@ -725,7 +760,7 @@ fi
 echo ""
 
 # Systemd service option (Linux only)
-echo -e "${BOLD}${BLUE}4. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux Only)${RESET}"
+echo -e "${BOLD}${BLUE}6. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux Only)${RESET}"
 if [ "$OS" = "linux" ]; then
     print_info "Configure MIRA to start automatically on system boot?"
     print_info "This creates a systemd service that starts MIRA when the system boots."
@@ -758,6 +793,8 @@ echo ""
 echo -e "${BOLD}Configuration Summary:${RESET}"
 echo -e "  Anthropic:       ${STATUS_ANTHROPIC}"
 echo -e "  Groq:            ${STATUS_GROQ}"
+echo -e "  Kagi:            ${STATUS_KAGI}"
+echo -e "  DB Password:     ${STATUS_DB_PASSWORD}"
 echo -e "  Playwright:      ${STATUS_PLAYWRIGHT}"
 echo -e "  Systemd Service: ${STATUS_SYSTEMD}"
 echo ""
@@ -1417,112 +1454,69 @@ echo -e "${CHECKMARK} ${DIM}(ready after ${i}s)${RESET}"
 
 print_header "Step 13: PostgreSQL Configuration"
 
-# Check if database exists, create if not
-echo -ne "${DIM}${ARROW}${RESET} Creating database 'mira_service'... "
-if check_exists db mira_service; then
-    echo -e "${DIM}(already exists)${RESET}"
-else
+# Run schema file - single source of truth for database structure
+# Schema file creates: roles, database, extensions, tables, indexes, RLS policies
+echo -ne "${DIM}${ARROW}${RESET} Running database schema (roles, tables, indexes, RLS)... "
+SCHEMA_FILE="${MIRA_DIR}/app/deploy/mira_service_schema.sql"
+if [ -f "$SCHEMA_FILE" ]; then
     if [ "$OS" = "linux" ]; then
-        if sudo -u postgres psql -c "CREATE DATABASE mira_service;" > /dev/null 2>&1; then
+        # Run as postgres superuser; schema handles CREATE DATABASE and \c
+        if sudo -u postgres psql -f "$SCHEMA_FILE" > /dev/null 2>&1; then
             echo -e "${CHECKMARK}"
         else
             echo -e "${ERROR}"
-            print_error "Failed to create database 'mira_service'"
+            print_error "Failed to run schema file"
             exit 1
         fi
     elif [ "$OS" = "macos" ]; then
-        if createdb mira_service > /dev/null 2>&1; then
+        if psql postgres -f "$SCHEMA_FILE" > /dev/null 2>&1; then
             echo -e "${CHECKMARK}"
         else
             echo -e "${ERROR}"
-            print_error "Failed to create database 'mira_service'"
+            print_error "Failed to run schema file"
             exit 1
         fi
     fi
-fi
-
-# Check if user mira_admin exists, create if not
-echo -ne "${DIM}${ARROW}${RESET} Creating user 'mira_admin'... "
-if check_exists db_user mira_admin; then
-    echo -e "${DIM}(already exists)${RESET}"
 else
-    if [ "$OS" = "linux" ]; then
-        if sudo -u postgres psql -c "CREATE USER mira_admin WITH PASSWORD 'changethisifdeployingpwd' SUPERUSER;" > /dev/null 2>&1; then
-            echo -e "${CHECKMARK}"
-        else
-            echo -e "${ERROR}"
-            print_error "Failed to create user 'mira_admin'"
-            exit 1
-        fi
-    elif [ "$OS" = "macos" ]; then
-        if psql postgres -c "CREATE USER mira_admin WITH PASSWORD 'changethisifdeployingpwd' SUPERUSER;" > /dev/null 2>&1; then
-            echo -e "${CHECKMARK}"
-        else
-            echo -e "${ERROR}"
-            print_error "Failed to create user 'mira_admin'"
-            exit 1
-        fi
-    fi
+    echo -e "${ERROR}"
+    print_error "Schema file not found: $SCHEMA_FILE"
+    exit 1
 fi
 
-# Check if user mira_dbuser exists, create if not
-echo -ne "${DIM}${ARROW}${RESET} Creating user 'mira_dbuser'... "
-if check_exists db_user mira_dbuser; then
-    echo -e "${DIM}(already exists)${RESET}"
-else
+# Update PostgreSQL passwords if custom password was set
+if [ "$CONFIG_DB_PASSWORD" != "changethisifdeployingpwd" ]; then
+    echo -ne "${DIM}${ARROW}${RESET} Updating database passwords... "
     if [ "$OS" = "linux" ]; then
-        if sudo -u postgres psql -c "CREATE USER mira_dbuser WITH PASSWORD 'changethisifdeployingpwd';" > /dev/null 2>&1; then
-            echo -e "${CHECKMARK}"
-        else
-            echo -e "${ERROR}"
-            print_error "Failed to create user 'mira_dbuser'"
-            exit 1
-        fi
+        sudo -u postgres psql -c "ALTER USER mira_admin WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1 && \
+        sudo -u postgres psql -c "ALTER USER mira_dbuser WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1
     elif [ "$OS" = "macos" ]; then
-        if psql postgres -c "CREATE USER mira_dbuser WITH PASSWORD 'changethisifdeployingpwd';" > /dev/null 2>&1; then
-            echo -e "${CHECKMARK}"
-        else
-            echo -e "${ERROR}"
-            print_error "Failed to create user 'mira_dbuser'"
-            exit 1
-        fi
+        psql postgres -c "ALTER USER mira_admin WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1 && \
+        psql postgres -c "ALTER USER mira_dbuser WITH PASSWORD '${CONFIG_DB_PASSWORD}';" > /dev/null 2>&1
     fi
-fi
-
-# Grant privileges (OS-specific commands)
-if [ "$OS" = "linux" ]; then
-    run_with_status "Granting privileges to mira_admin" \
-        sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE mira_service TO mira_admin;"
-
-    run_with_status "Granting privileges to mira_dbuser" \
-        sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE mira_service TO mira_dbuser;"
-
-    run_with_status "Enabling pgvector extension" \
-        sudo -u postgres psql -d mira_service -c "CREATE EXTENSION IF NOT EXISTS vector;"
-elif [ "$OS" = "macos" ]; then
-    run_with_status "Granting privileges to mira_admin" \
-        psql postgres -c "GRANT ALL PRIVILEGES ON DATABASE mira_service TO mira_admin;"
-
-    run_with_status "Granting privileges to mira_dbuser" \
-        psql postgres -c "GRANT ALL PRIVILEGES ON DATABASE mira_service TO mira_dbuser;"
-
-    run_with_status "Enabling pgvector extension" \
-        psql -d mira_service -c "CREATE EXTENSION IF NOT EXISTS vector;"
+    if [ $? -eq 0 ]; then
+        echo -e "${CHECKMARK}"
+    else
+        echo -e "${ERROR}"
+        print_warning "Failed to update passwords - you may need to update manually"
+    fi
 fi
 
 print_success "PostgreSQL configured"
 
 print_header "Step 14: Vault Credential Storage"
 
-vault_put_if_not_exists secret/mira/api_keys \
-    anthropic_key="${CONFIG_ANTHROPIC_KEY}" \
-    groq_key="${CONFIG_GROQ_KEY}"
+# Build api_keys arguments (only include non-empty keys)
+API_KEYS_ARGS="anthropic_key=\"${CONFIG_ANTHROPIC_KEY}\" groq_key=\"${CONFIG_GROQ_KEY}\""
+if [ -n "$CONFIG_KAGI_KEY" ]; then
+    API_KEYS_ARGS="$API_KEYS_ARGS kagi_api_key=\"${CONFIG_KAGI_KEY}\""
+fi
+eval vault_put_if_not_exists secret/mira/api_keys $API_KEYS_ARGS
 
 vault_put_if_not_exists secret/mira/database \
-    admin_url="postgresql://mira_admin:changethisifdeployingpwd@localhost:5432/mira_service" \
-    password="changethisifdeployingpwd" \
+    admin_url="postgresql://mira_admin:${CONFIG_DB_PASSWORD}@localhost:5432/mira_service" \
+    password="${CONFIG_DB_PASSWORD}" \
     username="mira_dbuser" \
-    service_url="postgresql://mira_dbuser:changethisifdeployingpwd@localhost:5432/mira_service"
+    service_url="postgresql://mira_dbuser:${CONFIG_DB_PASSWORD}@localhost:5432/mira_service"
 
 vault_put_if_not_exists secret/mira/services \
     app_url="http://localhost:1993" \
@@ -1748,6 +1742,7 @@ echo ""
 echo -e "${BOLD}${BLUE}API Key Configuration${RESET}"
 echo -e "  Anthropic: ${STATUS_ANTHROPIC}"
 echo -e "  Groq:      ${STATUS_GROQ}"
+echo -e "  Kagi:      ${STATUS_KAGI}"
 
 if [ "${CONFIG_ANTHROPIC_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ] || [ "${CONFIG_GROQ_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
     echo ""
@@ -1758,7 +1753,8 @@ if [ "${CONFIG_ANTHROPIC_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ] || [ "${CONFIG_G
     echo -e "${DIM}    vault login <root-token-from-init-keys.txt>${RESET}"
     echo -e "${DIM}    vault kv put secret/mira/api_keys \\\\${RESET}"
     echo -e "${DIM}      anthropic_key=\"sk-ant-your-key\" \\\\${RESET}"
-    echo -e "${DIM}      groq_key=\"gsk_your-key\"${RESET}"
+    echo -e "${DIM}      groq_key=\"gsk_your-key\" \\\\${RESET}"
+    echo -e "${DIM}      kagi_api_key=\"your-kagi-key\"${RESET}"
 fi
 
 echo ""
