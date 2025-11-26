@@ -479,6 +479,8 @@ CONFIG_DB_PASSWORD=""
 CONFIG_INSTALL_PLAYWRIGHT=""
 CONFIG_INSTALL_SYSTEMD=""
 CONFIG_START_MIRA_NOW=""
+CONFIG_OFFLINE_MODE=""
+CONFIG_OLLAMA_MODEL=""
 STATUS_ANTHROPIC=""
 STATUS_GROQ=""
 STATUS_KAGI=""
@@ -649,87 +651,135 @@ print_success "Port check passed"
 
 print_header "API Key Configuration"
 
-print_info "MIRA requires both Anthropic and Groq API keys to function."
-print_info "You can set them now or skip and configure later (MIRA won't work until both are set)."
-echo ""
-
-# Anthropic API Key (required)
-echo -e "${BOLD}${BLUE}1. Anthropic API Key${RESET} ${DIM}(REQUIRED)${RESET}"
-print_info "Used for: Main LLM operations (Claude models)"
-print_info "Get your key at: https://console.anthropic.com/settings/keys"
-echo ""
-read -p "$(echo -e ${CYAN}Enter your Anthropic API key${RESET}) (or press Enter to skip): " ANTHROPIC_KEY_INPUT
-if [ -z "$ANTHROPIC_KEY_INPUT" ]; then
-    CONFIG_ANTHROPIC_KEY="PLACEHOLDER_SET_THIS_LATER"
-    STATUS_ANTHROPIC="${WARNING} NOT SET - You must configure this before using MIRA"
-else
-    # Basic validation - check if it looks like an Anthropic key
-    if [[ $ANTHROPIC_KEY_INPUT =~ ^sk-ant- ]]; then
-        CONFIG_ANTHROPIC_KEY="$ANTHROPIC_KEY_INPUT"
-        STATUS_ANTHROPIC="${CHECKMARK} Configured"
-    else
-        print_warning "This doesn't look like a valid Anthropic API key (should start with 'sk-ant-')"
-        read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y/n): " CONFIRM
-        if [[ ! "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
-            CONFIG_ANTHROPIC_KEY="PLACEHOLDER_SET_THIS_LATER"
-            STATUS_ANTHROPIC="${WARNING} NOT SET"
-        else
-            CONFIG_ANTHROPIC_KEY="$ANTHROPIC_KEY_INPUT"
-            STATUS_ANTHROPIC="${CHECKMARK} Configured (unvalidated)"
-        fi
-    fi
-fi
-echo ""
-
-# Groq API Key (required)
-echo -e "${BOLD}${BLUE}2. Groq API Key${RESET} ${DIM}(REQUIRED)${RESET}"
-print_info "Used for: Fast inference and web extraction operations"
-print_info "Get your key at: https://console.groq.com/keys"
-echo ""
-read -p "$(echo -e ${CYAN}Enter your Groq API key${RESET}) (or press Enter to skip): " GROQ_KEY_INPUT
-if [ -z "$GROQ_KEY_INPUT" ]; then
-    CONFIG_GROQ_KEY="PLACEHOLDER_SET_THIS_LATER"
-    STATUS_GROQ="${WARNING} NOT SET - You must configure this before using MIRA"
-else
-    # Basic validation - check if it looks like a Groq key
-    if [[ $GROQ_KEY_INPUT =~ ^gsk_ ]]; then
-        CONFIG_GROQ_KEY="$GROQ_KEY_INPUT"
-        STATUS_GROQ="${CHECKMARK} Configured"
-    else
-        print_warning "This doesn't look like a valid Groq API key (should start with 'gsk_')"
-        read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y/n): " CONFIRM
-        if [[ ! "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
-            CONFIG_GROQ_KEY="PLACEHOLDER_SET_THIS_LATER"
-            STATUS_GROQ="${WARNING} NOT SET"
-        else
-            CONFIG_GROQ_KEY="$GROQ_KEY_INPUT"
-            STATUS_GROQ="${CHECKMARK} Configured (unvalidated)"
-        fi
-    fi
-fi
-echo ""
-
-# Kagi API Key (optional - for web search)
-echo -e "${BOLD}${BLUE}3. Kagi Search API Key${RESET} ${DIM}(OPTIONAL)${RESET}"
-print_info "Enables high-quality web search via Kagi's API"
-print_info "Get your key at: https://kagi.com/settings?p=api"
-echo ""
-read -p "$(echo -e ${CYAN}Enter your Kagi API key${RESET}) (or press Enter to skip): " KAGI_KEY_INPUT
-if [ -z "$KAGI_KEY_INPUT" ]; then
+# Offline mode option
+echo -e "${BOLD}${BLUE}Run Mode${RESET}"
+print_info "MIRA can run offline using local Ollama - no API keys needed."
+print_info "To switch to online mode later, just add API keys to Vault."
+read -p "$(echo -e ${CYAN}Run offline only?${RESET}) (y/n, default=n): " OFFLINE_MODE_INPUT
+if [[ "$OFFLINE_MODE_INPUT" =~ ^[Yy](es)?$ ]]; then
+    CONFIG_OFFLINE_MODE="yes"
+    CONFIG_ANTHROPIC_KEY=""
+    CONFIG_GROQ_KEY=""
     CONFIG_KAGI_KEY=""
-    STATUS_KAGI="${DIM}Skipped - web search will use fallback methods${RESET}"
+    STATUS_ANTHROPIC="${DIM}Offline mode${RESET}"
+    STATUS_GROQ="${DIM}Offline mode${RESET}"
+    STATUS_KAGI="${DIM}Offline mode${RESET}"
+
+    # Ask for model name
+    read -p "$(echo -e ${CYAN}Ollama model to use${RESET}) (default: qwen3:1.7b): " OLLAMA_MODEL_INPUT
+    if [ -z "$OLLAMA_MODEL_INPUT" ]; then
+        CONFIG_OLLAMA_MODEL="qwen3:1.7b"
+    else
+        CONFIG_OLLAMA_MODEL="$OLLAMA_MODEL_INPUT"
+    fi
+
+    # Try to install Ollama if not present
+    echo ""
+    if command -v ollama &> /dev/null; then
+        print_info "Ollama already installed"
+        OLLAMA_INSTALLED=true
+    else
+        print_info "Attempting to install Ollama..."
+        if curl -fsSL https://ollama.com/install.sh | sh > /dev/null 2>&1; then
+            print_success "Ollama installed"
+            OLLAMA_INSTALLED=true
+        else
+            print_warning "Could not install Ollama (network unavailable or blocked)"
+            OLLAMA_INSTALLED=false
+        fi
+    fi
+
+    # Try to pull the model
+    if [ "$OLLAMA_INSTALLED" = true ]; then
+        print_info "Pulling model ${CONFIG_OLLAMA_MODEL}..."
+        if ollama pull "$CONFIG_OLLAMA_MODEL" > /dev/null 2>&1; then
+            print_success "Model ${CONFIG_OLLAMA_MODEL} ready"
+        else
+            print_warning "Could not pull model (network unavailable)"
+            echo ""
+            print_info "For air-gapped installation, manually transfer the model:"
+            print_info "  1. On a connected machine: ollama pull ${CONFIG_OLLAMA_MODEL}"
+            print_info "  2. Export: ~/.ollama/models -> transfer to this machine"
+            print_info "  3. Or use: ollama create ${CONFIG_OLLAMA_MODEL} -f Modelfile"
+        fi
+    else
+        echo ""
+        print_info "For air-gapped Ollama installation:"
+        print_info "  1. Download Ollama binary from https://ollama.com/download"
+        print_info "  2. Transfer and install manually"
+        print_info "  3. Transfer model files to ~/.ollama/models"
+        print_info "  4. Start Ollama: ollama serve"
+    fi
+
+    # Store model name for later config patching (after files are copied)
+    CONFIG_PATCH_OLLAMA_MODEL="$CONFIG_OLLAMA_MODEL"
+    echo ""
 else
-    CONFIG_KAGI_KEY="$KAGI_KEY_INPUT"
-    STATUS_KAGI="${CHECKMARK} Configured"
+    CONFIG_OFFLINE_MODE="no"
+
+    # Anthropic API Key (required for online mode)
+    echo -e "${BOLD}${BLUE}1. Anthropic API Key${RESET} ${DIM}(REQUIRED - console.anthropic.com/settings/keys)${RESET}"
+    read -p "$(echo -e ${CYAN}Enter key${RESET}) (or Enter to skip): " ANTHROPIC_KEY_INPUT
+    if [ -z "$ANTHROPIC_KEY_INPUT" ]; then
+        CONFIG_ANTHROPIC_KEY="PLACEHOLDER_SET_THIS_LATER"
+        STATUS_ANTHROPIC="${WARNING} NOT SET - You must configure this before using MIRA"
+    else
+        # Basic validation - check if it looks like an Anthropic key
+        if [[ $ANTHROPIC_KEY_INPUT =~ ^sk-ant- ]]; then
+            CONFIG_ANTHROPIC_KEY="$ANTHROPIC_KEY_INPUT"
+            STATUS_ANTHROPIC="${CHECKMARK} Configured"
+        else
+            print_warning "This doesn't look like a valid Anthropic API key (should start with 'sk-ant-')"
+            read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y/n): " CONFIRM
+            if [[ ! "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
+                CONFIG_ANTHROPIC_KEY="PLACEHOLDER_SET_THIS_LATER"
+                STATUS_ANTHROPIC="${WARNING} NOT SET"
+            else
+                CONFIG_ANTHROPIC_KEY="$ANTHROPIC_KEY_INPUT"
+                STATUS_ANTHROPIC="${CHECKMARK} Configured (unvalidated)"
+            fi
+        fi
+    fi
+
+    # Groq API Key (required for online mode)
+    echo -e "${BOLD}${BLUE}2. Groq API Key${RESET} ${DIM}(REQUIRED - console.groq.com/keys)${RESET}"
+    read -p "$(echo -e ${CYAN}Enter key${RESET}) (or Enter to skip): " GROQ_KEY_INPUT
+    if [ -z "$GROQ_KEY_INPUT" ]; then
+        CONFIG_GROQ_KEY="PLACEHOLDER_SET_THIS_LATER"
+        STATUS_GROQ="${WARNING} NOT SET - You must configure this before using MIRA"
+    else
+        # Basic validation - check if it looks like a Groq key
+        if [[ $GROQ_KEY_INPUT =~ ^gsk_ ]]; then
+            CONFIG_GROQ_KEY="$GROQ_KEY_INPUT"
+            STATUS_GROQ="${CHECKMARK} Configured"
+        else
+            print_warning "This doesn't look like a valid Groq API key (should start with 'gsk_')"
+            read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y/n): " CONFIRM
+            if [[ ! "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
+                CONFIG_GROQ_KEY="PLACEHOLDER_SET_THIS_LATER"
+                STATUS_GROQ="${WARNING} NOT SET"
+            else
+                CONFIG_GROQ_KEY="$GROQ_KEY_INPUT"
+                STATUS_GROQ="${CHECKMARK} Configured (unvalidated)"
+            fi
+        fi
+    fi
+
+    # Kagi API Key (optional - for web search)
+    echo -e "${BOLD}${BLUE}3. Kagi Search API Key${RESET} ${DIM}(OPTIONAL - kagi.com/settings?p=api)${RESET}"
+    read -p "$(echo -e ${CYAN}Enter key${RESET}) (or Enter to skip): " KAGI_KEY_INPUT
+    if [ -z "$KAGI_KEY_INPUT" ]; then
+        CONFIG_KAGI_KEY=""
+        STATUS_KAGI="${DIM}Skipped${RESET}"
+    else
+        CONFIG_KAGI_KEY="$KAGI_KEY_INPUT"
+        STATUS_KAGI="${CHECKMARK} Configured"
+    fi
 fi
-echo ""
 
 # Database Password (optional - defaults to changethisifdeployingpwd)
-echo -e "${BOLD}${BLUE}4. Database Password${RESET} ${DIM}(OPTIONAL)${RESET}"
-print_info "Set a custom password for PostgreSQL users (mira_admin, mira_dbuser)"
-print_info "Default: 'changethisifdeployingpwd' - recommended to change for production"
-echo ""
-read -p "$(echo -e ${CYAN}Enter database password${RESET}) (or press Enter for default): " DB_PASSWORD_INPUT
+echo -e "${BOLD}${BLUE}4. Database Password${RESET} ${DIM}(OPTIONAL - default: changethisifdeployingpwd)${RESET}"
+read -p "$(echo -e ${CYAN}Enter password${RESET}) (or Enter for default): " DB_PASSWORD_INPUT
 if [ -z "$DB_PASSWORD_INPUT" ]; then
     CONFIG_DB_PASSWORD="changethisifdeployingpwd"
     STATUS_DB_PASSWORD="${DIM}Using default password${RESET}"
@@ -737,14 +787,10 @@ else
     CONFIG_DB_PASSWORD="$DB_PASSWORD_INPUT"
     STATUS_DB_PASSWORD="${CHECKMARK} Custom password set"
 fi
-echo ""
 
 # Playwright Browser Installation (optional)
-echo -e "${BOLD}${BLUE}5. Playwright Browser Installation${RESET} ${DIM}(OPTIONAL)${RESET}"
-print_info "Enables advanced webpage extraction for JavaScript-heavy sites"
-print_info "MIRA can function without it (basic HTTP requests still work)"
-echo ""
-read -p "$(echo -e ${CYAN}Install Playwright and browser dependencies?${RESET}) (y/n, default=y): " PLAYWRIGHT_INPUT
+echo -e "${BOLD}${BLUE}5. Playwright Browser${RESET} ${DIM}(OPTIONAL - for JS-heavy webpage extraction)${RESET}"
+read -p "$(echo -e ${CYAN}Install Playwright?${RESET}) (y/n, default=y): " PLAYWRIGHT_INPUT
 # Default to yes if user just presses Enter
 if [ -z "$PLAYWRIGHT_INPUT" ]; then
     PLAYWRIGHT_INPUT="y"
@@ -754,21 +800,16 @@ if [[ "$PLAYWRIGHT_INPUT" =~ ^[Yy](es)?$ ]]; then
     STATUS_PLAYWRIGHT="${CHECKMARK} Will be installed"
 else
     CONFIG_INSTALL_PLAYWRIGHT="no"
-    STATUS_PLAYWRIGHT="${YELLOW}Skipped - webpage extraction unavailable${RESET}"
+    STATUS_PLAYWRIGHT="${YELLOW}Skipped${RESET}"
 fi
-echo ""
 
 # Systemd service option (Linux only)
-echo -e "${BOLD}${BLUE}6. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux Only)${RESET}"
+echo -e "${BOLD}${BLUE}6. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux only, auto-start on boot)${RESET}"
 if [ "$OS" = "linux" ]; then
-    print_info "Configure MIRA to start automatically on system boot?"
-    print_info "This creates a systemd service that starts MIRA when the system boots."
-    echo ""
-    read -p "$(echo -e ${CYAN}Install MIRA as systemd service?${RESET}) (y/n): " SYSTEMD_INPUT
+    read -p "$(echo -e ${CYAN}Install as systemd service?${RESET}) (y/n): " SYSTEMD_INPUT
     if [[ "$SYSTEMD_INPUT" =~ ^[Yy](es)?$ ]]; then
         CONFIG_INSTALL_SYSTEMD="yes"
-        echo ""
-        read -p "$(echo -e ${CYAN}Start MIRA service immediately after installation?${RESET}) (y/n): " START_NOW_INPUT
+        read -p "$(echo -e ${CYAN}Start MIRA now?${RESET}) (y/n): " START_NOW_INPUT
         if [[ "$START_NOW_INPUT" =~ ^[Yy](es)?$ ]]; then
             CONFIG_START_MIRA_NOW="yes"
             STATUS_SYSTEMD="${CHECKMARK} Will be installed and started"
@@ -779,20 +820,23 @@ if [ "$OS" = "linux" ]; then
     else
         CONFIG_INSTALL_SYSTEMD="no"
         CONFIG_START_MIRA_NOW="no"
-        STATUS_SYSTEMD="${RED}Skipped${RESET}"
+        STATUS_SYSTEMD="${DIM}Skipped${RESET}"
     fi
 elif [ "$OS" = "macos" ]; then
     CONFIG_INSTALL_SYSTEMD="no"
     CONFIG_START_MIRA_NOW="no"
-    print_info "Systemd service creation only available on Linux (macOS uses launchd)"
-    STATUS_SYSTEMD="${DIM}Not available on macOS${RESET}"
+    STATUS_SYSTEMD="${DIM}N/A (macOS)${RESET}"
 fi
-echo ""
 
+echo ""
 echo -e "${BOLD}Configuration Summary:${RESET}"
-echo -e "  Anthropic:       ${STATUS_ANTHROPIC}"
-echo -e "  Groq:            ${STATUS_GROQ}"
-echo -e "  Kagi:            ${STATUS_KAGI}"
+if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
+    echo -e "  Mode:            ${CYAN}Offline (Ollama: ${CONFIG_OLLAMA_MODEL})${RESET}"
+else
+    echo -e "  Anthropic:       ${STATUS_ANTHROPIC}"
+    echo -e "  Groq:            ${STATUS_GROQ}"
+    echo -e "  Kagi:            ${STATUS_KAGI}"
+fi
 echo -e "  DB Password:     ${STATUS_DB_PASSWORD}"
 echo -e "  Playwright:      ${STATUS_PLAYWRIGHT}"
 echo -e "  Systemd Service: ${STATUS_SYSTEMD}"
@@ -1002,6 +1046,17 @@ run_quiet rm -f /tmp/mira-main.tar.gz
 run_quiet rm -rf /tmp/mira-OSS-main
 
 print_success "MIRA installed to /opt/mira/app"
+
+# Patch config if offline mode with custom model
+if [ -n "$CONFIG_PATCH_OLLAMA_MODEL" ] && [ "$CONFIG_PATCH_OLLAMA_MODEL" != "qwen3:1.7b" ]; then
+    echo -ne "${DIM}${ARROW}${RESET} Patching config with model ${CONFIG_PATCH_OLLAMA_MODEL}... "
+    if [ "$OS" = "macos" ]; then
+        sed -i '' "s|default=\"qwen3:1.7b\"|default=\"${CONFIG_PATCH_OLLAMA_MODEL}\"|" /opt/mira/app/config/config.py
+    else
+        sed -i "s|default=\"qwen3:1.7b\"|default=\"${CONFIG_PATCH_OLLAMA_MODEL}\"|" /opt/mira/app/config/config.py
+    fi
+    echo -e "${CHECKMARK}"
+fi
 
 print_header "Step 4: Python Environment Setup"
 
@@ -1374,8 +1429,8 @@ cat > /opt/vault/unseal.sh <<'EOF'
 #!/bin/bash
 export VAULT_ADDR='http://127.0.0.1:8200'
 sleep 5
-UNSEAL_KEY=$(grep 'Unseal Key 1:' /opt/vault/init-keys.txt | awk '{print $4}')
-echo "$UNSEAL_KEY" | vault operator unseal -
+UNSEAL_KEY=$(grep 'Unseal Key 1:' /opt/vault/init-keys.txt | awk '{print $NF}')
+vault operator unseal "$UNSEAL_KEY"
 EOF
 echo -e "${CHECKMARK}"
 
@@ -1536,8 +1591,49 @@ cat > /opt/mira/mira.sh <<'WRAPPER_EOF'
 # Save original directory
 ORIGINAL_DIR="$(pwd)"
 
-# Set Vault environment variables (files contain just the raw value)
+# Set Vault address
 export VAULT_ADDR='http://127.0.0.1:8200'
+
+# Check if Vault is running and accessible
+if ! curl -s http://127.0.0.1:8200/v1/sys/health > /dev/null 2>&1; then
+    echo "Error: Vault is not running at $VAULT_ADDR"
+    echo "Start Vault first:"
+    echo "  Linux: sudo systemctl start vault"
+    echo "  macOS: vault server -config=/opt/vault/config/vault.hcl &"
+    exit 1
+fi
+
+# Check if Vault is sealed and auto-unseal if needed
+# vault status exit codes: 0=unsealed, 2=sealed, 1=error
+vault status > /dev/null 2>&1
+VAULT_STATUS=$?
+
+if [ $VAULT_STATUS -eq 2 ]; then
+    echo "Vault is sealed. Attempting to unseal..."
+    if [ -f /opt/vault/init-keys.txt ]; then
+        UNSEAL_KEY=$(grep 'Unseal Key 1:' /opt/vault/init-keys.txt | awk '{print $NF}')
+        if [ -n "$UNSEAL_KEY" ]; then
+            if vault operator unseal "$UNSEAL_KEY" > /dev/null 2>&1; then
+                echo "Vault unsealed successfully."
+            else
+                echo "Error: Failed to unseal Vault"
+                exit 1
+            fi
+        else
+            echo "Error: Could not extract unseal key from /opt/vault/init-keys.txt"
+            exit 1
+        fi
+    else
+        echo "Error: Vault init-keys.txt not found at /opt/vault/init-keys.txt"
+        echo "Run /opt/vault/unseal.sh manually or check Vault configuration."
+        exit 1
+    fi
+elif [ $VAULT_STATUS -eq 1 ]; then
+    echo "Error: Could not determine Vault status"
+    exit 1
+fi
+
+# Set Vault credentials (files contain just the raw value)
 export VAULT_ROLE_ID=$(cat /opt/vault/role-id.txt)
 export VAULT_SECRET_ID=$(cat /opt/vault/secret-id.txt)
 
@@ -1738,22 +1834,31 @@ if [ "$OS" = "macos" ]; then
 fi
 
 echo ""
-echo -e "${BOLD}${BLUE}API Key Configuration${RESET}"
-echo -e "  Anthropic: ${STATUS_ANTHROPIC}"
-echo -e "  Groq:      ${STATUS_GROQ}"
-echo -e "  Kagi:      ${STATUS_KAGI}"
-
-if [ "${CONFIG_ANTHROPIC_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ] || [ "${CONFIG_GROQ_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
+if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
+    echo -e "${BOLD}${BLUE}Offline Mode Configuration${RESET}"
+    echo -e "  Mode:   ${CYAN}Offline (local Ollama)${RESET}"
+    echo -e "  Model:  ${CONFIG_OLLAMA_MODEL}"
     echo ""
-    print_warning "Required API keys not configured!"
-    print_info "MIRA will not work until you set both API keys."
-    print_info "To configure later, use Vault CLI:"
-    echo -e "${DIM}    export VAULT_ADDR='http://127.0.0.1:8200'${RESET}"
-    echo -e "${DIM}    vault login <root-token-from-init-keys.txt>${RESET}"
-    echo -e "${DIM}    vault kv put secret/mira/api_keys \\\\${RESET}"
-    echo -e "${DIM}      anthropic_key=\"sk-ant-your-key\" \\\\${RESET}"
-    echo -e "${DIM}      groq_key=\"gsk_your-key\" \\\\${RESET}"
-    echo -e "${DIM}      kagi_api_key=\"your-kagi-key\"${RESET}"
+    print_info "Ensure Ollama is running: ollama serve"
+    print_info "To switch to online mode, add API keys to Vault"
+else
+    echo -e "${BOLD}${BLUE}API Key Configuration${RESET}"
+    echo -e "  Anthropic: ${STATUS_ANTHROPIC}"
+    echo -e "  Groq:      ${STATUS_GROQ}"
+    echo -e "  Kagi:      ${STATUS_KAGI}"
+
+    if [ "${CONFIG_ANTHROPIC_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ] || [ "${CONFIG_GROQ_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
+        echo ""
+        print_warning "Required API keys not configured!"
+        print_info "MIRA will not work until you set both API keys."
+        print_info "To configure later, use Vault CLI:"
+        echo -e "${DIM}    export VAULT_ADDR='http://127.0.0.1:8200'${RESET}"
+        echo -e "${DIM}    vault login <root-token-from-init-keys.txt>${RESET}"
+        echo -e "${DIM}    vault kv put secret/mira/api_keys \\\\${RESET}"
+        echo -e "${DIM}      anthropic_key=\"sk-ant-your-key\" \\\\${RESET}"
+        echo -e "${DIM}      groq_key=\"gsk_your-key\" \\\\${RESET}"
+        echo -e "${DIM}      kagi_api_key=\"your-kagi-key\"${RESET}"
+    fi
 fi
 
 echo ""
