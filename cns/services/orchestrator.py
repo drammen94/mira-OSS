@@ -218,6 +218,7 @@ class ContinuumOrchestrator:
         events = []
         response_text = ""
         raw_response = None
+        invoked_tool_loader = False  # Track if invokeother_tool was called during this turn
 
         # Apply thinking budget preference if set
         llm_kwargs = {}
@@ -231,13 +232,27 @@ class ContinuumOrchestrator:
                 llm_kwargs['thinking_enabled'] = True
                 llm_kwargs['thinking_budget'] = thinking_pref
 
+        # Apply model preference if set
+        model_pref = continuum.model_preference
+        if model_pref is not None:
+            llm_kwargs['model_preference'] = model_pref
+
         # Collect events from generator
         for event in self.llm_provider.stream_events(
             messages=complete_messages,
             tools=available_tools,
             **llm_kwargs
         ):
-            from cns.core.stream_events import TextEvent, ThinkingEvent, CompleteEvent
+            from cns.core.stream_events import TextEvent, ThinkingEvent, CompleteEvent, ToolExecutingEvent
+
+            # Detect invokeother_tool execution for auto-continuation
+            # Must check here because final response won't contain intermediate tool calls
+            if isinstance(event, ToolExecutingEvent):
+                if event.tool_name == "invokeother_tool":
+                    mode = event.arguments.get("mode", "")
+                    if mode in ["load", "fallback"]:
+                        invoked_tool_loader = True
+                        logger.info(f"Detected invokeother_tool execution with mode={mode}")
 
             # Call stream callback if provided (for compatibility during transition)
             if stream and stream_callback:
@@ -257,43 +272,22 @@ class ContinuumOrchestrator:
                 raw_response = event.response
                 response_text = self.llm_provider.extract_text_content(raw_response)
 
-                # Update cumulative token count for cache breakpoint calculation
-                # input_tokens = uncached content (new conversation messages)
-                # output_tokens = assistant response
-                # Cached system/tools appear in cache_read_input_tokens, not input_tokens
+                # Log cache metrics for observability
                 if hasattr(raw_response, 'usage') and raw_response.usage:
-                    conversation_tokens = raw_response.usage.input_tokens + raw_response.usage.output_tokens
-                    continuum.add_tokens(conversation_tokens)
-                    logger.debug(
-                        f"Added {conversation_tokens} tokens to cumulative count "
-                        f"(input: {raw_response.usage.input_tokens}, output: {raw_response.usage.output_tokens})"
-                    )
-
-                    # Check if caching occurred (cache_creation_input_tokens > 0)
-                    if hasattr(raw_response.usage, 'cache_creation_input_tokens') and \
-                       raw_response.usage.cache_creation_input_tokens > 0:
-                        continuum.mark_cached()
-                        logger.info(
-                            f"Ultra-fine cache created: {raw_response.usage.cache_creation_input_tokens} tokens "
-                            f"(total cached: {continuum._cached_up_to_tokens})"
-                        )
+                    usage = raw_response.usage
+                    cache_created = getattr(usage, 'cache_creation_input_tokens', 0)
+                    cache_read = getattr(usage, 'cache_read_input_tokens', 0)
+                    if cache_created > 0:
+                        logger.info(f"Cache created: {cache_created} tokens")
+                    if cache_read > 0:
+                        logger.debug(f"Cache read: {cache_read} tokens")
         
-        # Extract tools used from LLM response
+        # Extract tools used from LLM response for metadata
+        # Note: invoked_tool_loader is already set from ToolExecutingEvent above
         tool_calls = self.llm_provider.extract_tool_calls(raw_response)
-        tools_used_this_turn = []
-        invoked_tool_loader = False
         if tool_calls:
             tools_used_this_turn = [call["tool_name"] for call in tool_calls]
             metadata["tools_used"] = tools_used_this_turn
-
-            # Check if invokeother_tool was called to load tools
-            for call in tool_calls:
-                if call["tool_name"] == "invokeother_tool":
-                    mode = call.get("input", {}).get("mode", "")
-                    if mode in ["load", "fallback"]:
-                        invoked_tool_loader = True
-                        logger.info(f"Detected invokeother_tool call with mode={mode}")
-                        break
 
         # Parse tags from final response (preserve emotion tag for frontend extraction)
         parsed_tags = self.tag_parser.parse_response(response_text, preserve_tags=['my_emotion'])

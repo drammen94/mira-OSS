@@ -14,6 +14,7 @@ using the provided time boundaries for detailed information.
 import json
 import logging
 import re
+from datetime import timedelta
 from typing import Dict, Any, Optional, List, Tuple
 from uuid import UUID
 
@@ -22,7 +23,7 @@ from pydantic import BaseModel, Field
 from tools.repo import Tool
 from tools.registry import registry
 from cns.infrastructure.continuum_repository import get_continuum_repository
-from utils.timezone_utils import format_utc_iso, parse_utc_time_string
+from utils.timezone_utils import format_utc_iso, parse_utc_time_string, utc_now
 from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
 from lt_memory.hybrid_search import HybridSearcher
 from lt_memory.db_access import LTMemoryDB
@@ -53,17 +54,23 @@ class ContinuumSearchToolConfig(BaseModel):
         le=2000,
         description="Character length for message previews"
     )
-    min_rank_threshold: float = Field(
-        default=0.1,
-        ge=0.0,
-        le=1.0,
-        description="Minimum BM25 rank score to include in results"
-    )
     high_confidence_threshold: float = Field(
         default=0.70,
         ge=0.0,
         le=1.0,
         description="Threshold for considering results high confidence"
+    )
+    medium_confidence_threshold: float = Field(
+        default=0.40,
+        ge=0.0,
+        le=1.0,
+        description="Threshold for considering results medium confidence"
+    )
+    temporal_around_days: int = Field(
+        default=7,
+        ge=1,
+        le=30,
+        description="Number of days before/after reference_time for 'around' temporal searches"
     )
     default_context_window: int = Field(
         default=2,
@@ -142,8 +149,9 @@ class ContinuumSearchTool(Tool):
                 "operation": {
                     "type": "string",
                     "enum": ["search", "search_within_segment", "expand_message"],
+                    "default": "search",
                     "description": (
-                        "Operation: 'search' for summaries/messages, 'search_within_segment' "
+                        "Operation: 'search' (default) for summaries/messages, 'search_within_segment' "
                         "to explore a specific segment, 'expand_message' for full content"
                     )
                 },
@@ -239,7 +247,7 @@ class ContinuumSearchTool(Tool):
                     "description": "Number of context messages per direction (default: 2)"
                 }
             },
-            "required": ["operation"]
+            "required": []
         }
     }
 
@@ -258,7 +266,7 @@ class ContinuumSearchTool(Tool):
         # Get embeddings provider for query embeddings
         self._embeddings_provider = get_hybrid_embeddings_provider()
 
-    def run(self, operation: str, **kwargs) -> Dict[str, Any]:
+    def run(self, operation: str = "search", **kwargs) -> Dict[str, Any]:
         """
         Execute a continuum search operation.
 
@@ -285,7 +293,7 @@ class ContinuumSearchTool(Tool):
                     f"Valid operations are: search, search_within_segment, expand_message"
                 )
         except Exception as e:
-            self.logger.error(f"Error executing {operation} in conversationsearch_tool: {e}")
+            self.logger.error(f"Error executing {operation} in continuumsearch_tool: {e}")
             raise
 
     def _search_messages(
@@ -418,10 +426,10 @@ class ContinuumSearchTool(Tool):
                 temporal_clause = "AND m.created_at > %s"
                 temporal_params = [ref_time]
             elif temporal_direction == "around":
-                # ±7 days from reference time
-                from datetime import timedelta
-                start_time = ref_time - timedelta(days=7)
-                end_time = ref_time + timedelta(days=7)
+                # ± configured days from reference time
+                days = self._config.temporal_around_days
+                start_time = ref_time - timedelta(days=days)
+                end_time = ref_time + timedelta(days=days)
                 temporal_clause = "AND m.created_at BETWEEN %s AND %s"
                 temporal_params = [start_time, end_time]
 
@@ -465,8 +473,8 @@ class ContinuumSearchTool(Tool):
                 v.metadata,
                 v.vector_score,
                 COALESCE(t.text_rank, 0.0) AS text_rank,
-                -- Hybrid score: configurable vector/text weighting
-                ({self._config.hybrid_vector_weight} * v.vector_score + {1.0 - self._config.hybrid_vector_weight} * COALESCE(t.text_rank, 0.0)) AS hybrid_score
+                -- Hybrid score: tanh normalizes BM25 (unbounded) to [0,1] to match vector_score range
+                ({self._config.hybrid_vector_weight} * v.vector_score + {1.0 - self._config.hybrid_vector_weight} * TANH(COALESCE(t.text_rank, 0.0))) AS hybrid_score
             FROM vector_search v
             LEFT JOIN text_search t ON v.id = t.id
             ORDER BY hybrid_score DESC
@@ -535,6 +543,7 @@ class ContinuumSearchTool(Tool):
             })
 
         # Apply smart filtering based on confidence clustering
+        unfiltered_count = len(results)
         filtered_results = self._filter_results_by_confidence(results)
 
         # Calculate overall confidence
@@ -545,7 +554,7 @@ class ContinuumSearchTool(Tool):
             top_score = filtered_results[0]["confidence_score"]
             if top_score >= self._config.high_confidence_threshold:
                 status = "high_confidence"
-            elif top_score >= 0.40:
+            elif top_score >= self._config.medium_confidence_threshold:
                 status = "medium_confidence"
             else:
                 status = "low_confidence"
@@ -558,8 +567,9 @@ class ContinuumSearchTool(Tool):
             "entities": entities,
             "results": filtered_results,
             "result_count": len(filtered_results),
+            "filtered_from": unfiltered_count,
             "page": page,
-            "has_more_pages": len(results) == limit,  # Use original results for pagination check
+            "has_more_pages": unfiltered_count == limit,
             "search_mode": "summaries",
             "temporal_filter": {
                 "direction": temporal_direction,
@@ -571,88 +581,6 @@ class ContinuumSearchTool(Tool):
                 "text_weight": 1.0 - self._config.hybrid_vector_weight
             }
         }
-
-    def _execute_bm25_search(
-        self,
-        query: str,
-        entities: List[str],
-        limit: int,
-        offset: int
-    ) -> List[Dict[str, Any]]:
-        """
-        Execute BM25 full-text search against messages table.
-
-        Args:
-            query: Search query text
-            entities: List of entities to boost
-            limit: Maximum results to return
-            offset: Pagination offset
-
-        Returns:
-            List of matching messages with rank scores
-        """
-        try:
-            db = self._conversation_repo._get_client(self.user_id)
-
-            # Primary BM25 search using PostgreSQL full-text search
-            search_sql = """
-                SELECT
-                    m.id,
-                    m.continuum_id,
-                    m.role,
-                    m.content,
-                    m.created_at,
-                    m.metadata,
-                    ts_rank_cd(
-                        to_tsvector('english', m.content),
-                        plainto_tsquery('english', %s)
-                    ) AS rank
-                FROM messages m
-                WHERE m.content IS NOT NULL
-                  AND m.content <> ''
-                  AND to_tsvector('english', m.content) @@ plainto_tsquery('english', %s)
-                ORDER BY rank DESC
-                LIMIT %s OFFSET %s
-            """
-
-            rows = db.execute_query(search_sql, (query, query, limit, offset))
-
-            results = []
-            for row in rows:
-                rank_value = row.get("rank")
-                if rank_value is None or float(rank_value) < self._config.min_rank_threshold:
-                    continue
-
-                # Boost rank if entities are matched
-                final_rank = float(rank_value)
-                matched_entities = []
-                if entities:
-                    content_lower = row.get("content", "").lower()
-                    for entity in entities:
-                        if entity.lower() in content_lower:
-                            matched_entities.append(entity)
-
-                    # Boost rank by 20% for each matched entity
-                    if matched_entities:
-                        boost_factor = 1.0 + (0.2 * len(matched_entities))
-                        final_rank = min(final_rank * boost_factor, 1.0)
-
-                results.append({
-                    "id": str(row["id"]),
-                    "continuum_id": str(row["continuum_id"]),
-                    "role": row["role"],
-                    "content": row["content"],
-                    "created_at": row["created_at"],
-                    "metadata": row.get("metadata", {}),
-                    "rank": round(final_rank, 4),
-                    "matched_entities": matched_entities
-                })
-
-            return results
-
-        except Exception as e:
-            self.logger.error(f"BM25 search failed: {e}")
-            return []
 
     def _calculate_confidence(
         self,
@@ -719,6 +647,7 @@ class ContinuumSearchTool(Tool):
         full_uuid = message.get("id", "")
         short_id = full_uuid[:8] if full_uuid else ""
 
+        rank = message.get("rank", 0.0)
         return {
             "message_id": short_id,
             "full_uuid": full_uuid,  # Include but don't show to user
@@ -728,7 +657,8 @@ class ContinuumSearchTool(Tool):
             "preview": preview,
             "is_truncated": is_truncated,
             "full_length": len(content),
-            "match_score": message.get("rank", 0.0),
+            "match_score": rank,
+            "confidence_score": rank,  # Alias for confidence filtering compatibility
             "matched_entities": message.get("matched_entities", [])
         }
 
@@ -919,29 +849,36 @@ class ContinuumSearchTool(Tool):
                 "matched_entities": matched_entities
             })
 
-        # Calculate confidence
-        confidence = self._calculate_confidence(results, query, entities)
-
-        # Format as message previews
+        # Format as message previews (includes confidence_score for filtering)
         formatted_results = [self._format_message_preview(msg) for msg in results]
 
-        # Determine status
-        if confidence >= self._config.high_confidence_threshold:
-            status = "high_confidence"
-        elif confidence >= 0.40:
-            status = "medium_confidence"
+        # Apply smart filtering based on confidence clustering
+        unfiltered_count = len(formatted_results)
+        filtered_results = self._filter_results_by_confidence(formatted_results)
+
+        # Calculate overall confidence from filtered results
+        if not filtered_results:
+            confidence = 0.0
+            status = "no_results"
         else:
-            status = "low_confidence"
+            confidence = filtered_results[0]["confidence_score"]
+            if confidence >= self._config.high_confidence_threshold:
+                status = "high_confidence"
+            elif confidence >= self._config.medium_confidence_threshold:
+                status = "medium_confidence"
+            else:
+                status = "low_confidence"
 
         return {
             "status": status,
             "confidence": confidence,
             "query": query,
             "entities": entities,
-            "results": formatted_results,
-            "result_count": len(formatted_results),
+            "results": filtered_results,
+            "result_count": len(filtered_results),
+            "filtered_from": unfiltered_count,
             "page": page,
-            "has_more_pages": len(results) == limit,
+            "has_more_pages": unfiltered_count == limit,
             "search_mode": "messages",
             "time_boundaries": {
                 "start": start_time,
@@ -949,7 +886,7 @@ class ContinuumSearchTool(Tool):
             },
             "meta": {
                 "search_tier": "bm25_timeframe",
-                "message_count": len(results)
+                "message_count": unfiltered_count
             }
         }
 
@@ -965,7 +902,10 @@ class ContinuumSearchTool(Tool):
 
         Args:
             query: Natural language search query
-            entities: List of entities to potentially boost (not used in memory search)
+            entities: Accepted for API consistency but not applied to memory search.
+                Memory search relies on semantic similarity and importance scoring
+                rather than entity boosting, as memories are already entity-linked
+                via the entity_links field.
             max_results: Number of results per page
             page: Page number for pagination
 
@@ -1001,15 +941,17 @@ class ContinuumSearchTool(Tool):
             # Apply pagination
             paginated_results = results[offset:offset + limit]
 
-            # Format results
+            # Format results (importance_score used as confidence_score for filtering)
             formatted_results = []
             for memory in paginated_results:
+                importance = round(memory.importance_score, 3)
                 formatted_results.append({
                     "result_type": "memory",
                     "memory_id": str(memory.id)[:8],
                     "full_uuid": str(memory.id),
                     "text": memory.text,
-                    "importance_score": round(memory.importance_score, 3),
+                    "importance_score": importance,
+                    "confidence_score": importance,  # Alias for confidence filtering compatibility
                     "confidence": round(memory.confidence, 3) if memory.confidence else 1.0,
                     "created_at": format_utc_iso(memory.created_at),
                     "happens_at": format_utc_iso(memory.happens_at) if memory.happens_at else None,
@@ -1021,16 +963,20 @@ class ContinuumSearchTool(Tool):
                     "outbound_links": len(memory.outbound_links) if memory.outbound_links else 0
                 })
 
-            # Calculate overall confidence
-            if not formatted_results:
+            # Apply smart filtering based on confidence clustering
+            unfiltered_count = len(formatted_results)
+            filtered_results = self._filter_results_by_confidence(formatted_results)
+
+            # Calculate overall confidence from filtered results
+            if not filtered_results:
                 confidence = 0.0
                 status = "no_results"
             else:
                 # Use importance score of top result as confidence
-                top_importance = formatted_results[0]["importance_score"]
-                if top_importance >= 0.7:
+                top_importance = filtered_results[0]["importance_score"]
+                if top_importance >= self._config.high_confidence_threshold:
                     status = "high_confidence"
-                elif top_importance >= 0.4:
+                elif top_importance >= self._config.medium_confidence_threshold:
                     status = "medium_confidence"
                 else:
                     status = "low_confidence"
@@ -1041,8 +987,9 @@ class ContinuumSearchTool(Tool):
                 "confidence": round(confidence, 3),
                 "query": query,
                 "entities": entities,
-                "results": formatted_results,
-                "result_count": len(formatted_results),
+                "results": filtered_results,
+                "result_count": len(filtered_results),
+                "filtered_from": unfiltered_count,
                 "page": page,
                 "has_more_pages": len(results) > (offset + limit),
                 "search_mode": "memories",
@@ -1128,7 +1075,6 @@ class ContinuumSearchTool(Tool):
             if next_rows:
                 end_time = format_utc_iso(next_rows[0]["created_at"])
             else:
-                from utils.timezone_utils import utc_now
                 end_time = format_utc_iso(utc_now())
 
         # Use the time-bounded message search
@@ -1316,5 +1262,6 @@ class ContinuumSearchTool(Tool):
             return context
 
         except Exception as e:
-            self.logger.error(f"Failed to fetch context messages: {e}")
+            # WARNING not ERROR: empty context is non-fatal - user still gets main message
+            self.logger.warning(f"Failed to fetch context messages: {e}")
             return []

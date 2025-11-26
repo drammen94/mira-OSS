@@ -13,6 +13,8 @@ from fastapi.responses import JSONResponse
 from .base import BaseHandler, APIResponse, create_success_response
 from clients.postgres_client import PostgresClient
 from utils.timezone_utils import utc_now, format_utc_iso
+from utils.thread_monitor import ThreadMonitor
+from utils.scheduled_task_monitor import ScheduledTaskMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +101,115 @@ def health_endpoint():
         error_response = {
             "success": False,
             "error": {
-                "code": "HEALTH_CHECK_FAILED",
-                "message": "Health check failed"
-            },
-            "meta": {
+                "code": "HEALTH_CHECK_ERROR",
+                "message": f"Failed to perform health check: {str(e)}"
+            }
+        }
+        return JSONResponse(status_code=500, content=error_response)
+
+
+@router.get("/health/threads")
+def thread_health_endpoint():
+    """
+    Thread monitoring endpoint - shows active and stuck operations.
+
+    Returns information about thread pool usage and potentially stuck operations.
+    """
+    try:
+        from anyio import to_thread
+        limiter = to_thread.current_default_thread_limiter()
+
+        # Get thread pool stats
+        available_threads = limiter.available_tokens
+        total_threads = limiter.total_tokens
+        used_threads = total_threads - available_threads
+        usage_percent = (used_threads / total_threads) * 100 if total_threads > 0 else 0
+
+        # Get stuck operations
+        stuck_ops = ThreadMonitor.get_stuck_operations()
+        active_ops = ThreadMonitor.get_active_operations()
+
+        # Get scheduled job stats
+        job_stats = ScheduledTaskMonitor.get_job_stats()
+
+        # Determine health status
+        status = "healthy"
+        if usage_percent > 90:
+            status = "critical"
+        elif usage_percent > 70:
+            status = "warning"
+        if stuck_ops:
+            status = "critical"
+
+        response = {
+            "success": True,
+            "data": {
+                "status": status,
+                "thread_pool": {
+                    "available": available_threads,
+                    "total": total_threads,
+                    "used": used_threads,
+                    "usage_percent": round(usage_percent, 1)
+                },
+                "operations": {
+                    "active": len(active_ops),
+                    "stuck": len(stuck_ops),
+                    "active_operations": active_ops[:10],  # First 10 active ops
+                    "stuck_operations": stuck_ops  # All stuck ops (these are critical)
+                },
+                "scheduled_jobs": job_stats,
                 "timestamp": format_utc_iso(utc_now())
             }
         }
-        return JSONResponse(status_code=503, content=error_response)
+
+        # Return 503 if critical
+        if status == "critical":
+            return JSONResponse(status_code=503, content=response)
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Thread health endpoint error: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": {
+                "code": "MONITORING_ERROR",
+                "message": f"Failed to get thread monitoring data: {str(e)}"
+            }
+        }
+
+
+@router.get("/health/thread-dump")
+def thread_dump_endpoint():
+    """
+    Generate a detailed thread dump for debugging.
+
+    Returns complete thread state information for all threads.
+    """
+    try:
+        dump = ThreadMonitor.dump_thread_states()
+
+        # Also save to file for later analysis
+        import time
+        dump_file = f"/tmp/thread_dump_api_{int(time.time())}.txt"
+        with open(dump_file, 'w') as f:
+            f.write(dump)
+
+        return {
+            "success": True,
+            "data": {
+                "thread_dump": dump,
+                "saved_to": dump_file,
+                "timestamp": format_utc_iso(utc_now())
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Thread dump endpoint error: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": {
+                "code": "DUMP_ERROR",
+                "message": f"Failed to generate thread dump: {str(e)}"
+            }
+        }

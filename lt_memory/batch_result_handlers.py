@@ -18,6 +18,7 @@ from lt_memory.processing.memory_processor import MemoryProcessor
 from lt_memory.vector_ops import VectorOps
 from lt_memory.linking import LinkingService
 from lt_memory.models import ExtractionBatch, PostProcessingBatch
+from lt_memory.entity_extraction import EntityExtractor
 from utils.user_context import set_current_user_id, clear_user_context
 
 logger = logging.getLogger(__name__)
@@ -36,13 +37,15 @@ class ExtractionBatchResultHandler(BatchResultProcessor):
         memory_processor: MemoryProcessor,
         vector_ops: VectorOps,
         db: LTMemoryDB,
-        linking_service: LinkingService
+        linking_service: LinkingService,
+        entity_extractor: EntityExtractor
     ):
         self.anthropic_client = anthropic_client
         self.memory_processor = memory_processor
         self.vector_ops = vector_ops
         self.db = db
         self.linking = linking_service
+        self.entity_extractor = entity_extractor
 
     def process_result(self, batch_id: str, batch: ExtractionBatch) -> bool:
         """
@@ -131,9 +134,6 @@ class ExtractionBatchResultHandler(BatchResultProcessor):
             return
 
         try:
-            from lt_memory.entity_extraction import EntityExtractor
-
-            entity_extractor = EntityExtractor()
             memories = self.db.get_memories_by_ids(memory_ids, user_id=user_id)
             if not memories:
                 return
@@ -141,7 +141,7 @@ class ExtractionBatchResultHandler(BatchResultProcessor):
             total_links_created = 0
 
             for memory in memories:
-                entities_with_types = entity_extractor.extract_entities_with_types(memory.text)
+                entities_with_types = self.entity_extractor.extract_entities_with_types(memory.text)
                 if not entities_with_types:
                     continue
 
@@ -154,7 +154,7 @@ class ExtractionBatchResultHandler(BatchResultProcessor):
 
                 # Persist each unique entity and link to this memory
                 for entity_name, entity_type in unique_entities.values():
-                    entity_embedding = entity_extractor.nlp(entity_name).vector.tolist()
+                    entity_embedding = self.entity_extractor.nlp(entity_name).vector.tolist()
 
                     entity = self.db.get_or_create_entity(
                         name=entity_name,
@@ -174,7 +174,6 @@ class ExtractionBatchResultHandler(BatchResultProcessor):
                         total_links_created += 1
 
             logger.info(f"Persisted entities for {len(memories)} memories: {total_links_created} links created")
-            entity_extractor.cleanup()
 
         except Exception as e:
             logger.warning(f"Background entity persistence failed for user {user_id} (non-critical): {e}", exc_info=True)

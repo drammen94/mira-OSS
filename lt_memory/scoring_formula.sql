@@ -5,7 +5,8 @@
 -- Uses activity-based decay to prevent vacation-induced degradation.
 --
 -- FORMULA STRUCTURE:
--- 1. Expiration check: expires_at < NOW() → score = 0.0
+-- 1. Expiration check: expires_at > 5 days past → score = 0.0
+-- 1b. Expiration trailoff: 5-day linear decay AFTER expiration (1.0 → 0.0)
 -- 2. Activity deltas: current_activity_days - activity_days_at_[creation|last_access]
 -- 3. Momentum decay: access_count * 0.95^(activity_days_since_last_access)
 -- 4. Access rate: effective_access_count / MAX(7, activity_days_since_creation)
@@ -21,6 +22,7 @@
 -- - MOMENTUM_DECAY_RATE = 0.95 (5% fade per activity day)
 -- - MIN_AGE_DAYS = 7 (prevents spikes for new memories)
 -- - SIGMOID_CENTER = 2.0 (maps average memories to ~0.5 importance)
+-- - EXPIRATION_TRAILOFF_DAYS = 5 (grace period after expires_at)
 --
 -- ACTIVITY DAYS vs CALENDAR DAYS:
 -- - Decay calculations use ACTIVITY DAYS (user engagement days) to prevent
@@ -37,8 +39,9 @@
 
 ROUND(CAST(
     CASE
-        -- Hard zero if expired (calendar-based)
-        WHEN m.expires_at IS NOT NULL AND m.expires_at < NOW() THEN 0.0
+        -- Hard zero if expired more than 5 days ago (calendar-based)
+        WHEN m.expires_at IS NOT NULL
+             AND EXTRACT(EPOCH FROM (NOW() - m.expires_at)) / 86400 > 5 THEN 0.0
         ELSE
             -- "Earning Your Keep" scoring with activity-based decay
             1.0 / (1.0 + EXP(-(
@@ -87,6 +90,14 @@ ROUND(CAST(
                             WHEN EXTRACT(EPOCH FROM (m.happens_at - NOW())) / 86400 <= 14 THEN 1.2
                             ELSE 1.0
                         END
+                    ELSE 1.0
+                END *
+
+                -- EXPIRATION TRAILOFF: 5-day crash-out after expires_at (calendar-based)
+                CASE
+                    WHEN m.expires_at IS NOT NULL AND m.expires_at < NOW() THEN
+                        -- Linear decay from 1.0 to 0.0 over 5 days post-expiration
+                        GREATEST(0.0, 1.0 - (EXTRACT(EPOCH FROM (NOW() - m.expires_at)) / 86400) / 5.0)
                     ELSE 1.0
                 END
 

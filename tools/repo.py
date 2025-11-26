@@ -29,19 +29,39 @@ def get_config():
 class Tool(ABC):
     """
     Base class for all tools in the botwithmemory system.
-    
+
     This class defines the standard interface and behavior that all tools
     should implement. It includes metadata, parameter handling, and execution logic.
-    
+
     Class Attributes:
         name (str): The unique name of the tool.
         description (str): A human-readable description of the tool's purpose.
         usage_examples (List[Dict]): Example usage of the tool.
     """
-    
+
     name = "base_tool"
     description = "Base class for all tools"
     usage_examples: List[Dict[str, Any]] = []
+
+    @classmethod
+    def validate_config(cls, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate tool configuration and return any discovered data.
+
+        Override this in tools that need custom validation (e.g., connection tests,
+        auto-discovery of settings). Called by /actions/tools/{tool}/validate endpoint.
+
+        Args:
+            config: The configuration dict to validate
+
+        Returns:
+            Dict with discovered data (e.g., {"folders": [...], "discovered_folders": {...}})
+            Return empty dict if no special validation needed.
+
+        Raises:
+            ValueError: If validation fails
+        """
+        return {}
 
     def __init__(self):
         self.logger = logging.getLogger(f"tools.{self.name}")

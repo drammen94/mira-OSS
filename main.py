@@ -12,17 +12,17 @@ import os
 import signal
 import threading
 from contextlib import asynccontextmanager
-from pathlib import Path
 
-from typing import Optional
-from fastapi import FastAPI, Request
+from typing import Optionalfrom pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
 from config.config_manager import config
-from cns.api import data, actions, health
+from cns.api import data, actions, health, tool_config
 from cns.api import chat as chat_api
 from cns.api.base import APIError, create_error_response, generate_request_id
 from utils.scheduler_service import scheduler_service
@@ -77,16 +77,19 @@ def ensure_single_user(app: FastAPI) -> None:
             app.state.user_email = default_email
             app.state.api_key = api_key
 
-            print(f"\n{'='*60}")
-            print("✅ MIRA Ready - Single-User OSS Mode")
+            print(f"
+{'='*60}")
+            print("MIRA Ready - Single-User OSS Mode")
             print(f"{'='*60}")
             print(f"User: {default_email}")
             print(f"API Key: {api_key}")
-            print(f"{'='*60}\n")
+            print(f"{'='*60}
+")
             return
 
         elif user_count > 1:
-            print(f"\n❌ ERROR: Found {user_count} users")
+            print(f"
+ERROR: Found {user_count} users")
             print("MIRA OSS operates in single-user mode only.")
             sys.exit(1)
 
@@ -103,23 +106,28 @@ def ensure_single_user(app: FastAPI) -> None:
             api_key = secret_data['data']['data'].get('mira_api')
             app.state.api_key = api_key
 
-            print(f"\n✅ MIRA Ready - User: {user['email']}\n")
+            print(f"
+MIRA Ready - User: {user['email']}
+")
         except Exception as e:
             logger.error(f"Failed to retrieve API key from Vault: {e}")
-            print("\n❌ ERROR: Could not retrieve API key from Vault")
+            print("
+ERROR: Could not retrieve API key from Vault")
             sys.exit(1)
+
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle management."""
-
+    
     # Startup
     logger.info("  Starting MIRA...\n\n\n")
     logger.info("====================")
 
     # Ensure single user exists and load credentials
     ensure_single_user(app)
+
 
     # Configure FastAPI thread pool for synchronous endpoints
     from anyio import to_thread
@@ -241,7 +249,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down MIRA...")
     scheduler_service.stop()
-
+    
+    
     # Shutdown event bus
     if orchestrator.event_bus:
         orchestrator.event_bus.shutdown()
@@ -395,6 +404,7 @@ def create_app() -> FastAPI:
         )
     
     # Middleware stack (order matters)
+
     if config.api_server.enable_cors:
         app.add_middleware(
             CORSMiddleware,
@@ -409,7 +419,9 @@ def create_app() -> FastAPI:
     app.include_router(chat_api.router, prefix="/v0/api", tags=["chat"])
     app.include_router(data.router, prefix="/v0/api", tags=["data"])
     app.include_router(actions.router, prefix="/v0/api", tags=["actions"])
+    app.include_router(tool_config.router, prefix="/v0/api", tags=["tool_config"])
 
+    
     return app
 
 

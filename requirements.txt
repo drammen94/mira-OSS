@@ -19,7 +19,6 @@ valkey            # Redis-compatible cache - valkey_client.py, many services
 
 # == AUTHENTICATION & SECURITY ==
 PyJWT             # JWT token handling - auth service, tests
-webauthn          # WebAuthn authentication - auth service, database helper
 cryptography      # Encryption utilities - credential_security.py, userdata_manager.py
 
 # == AI & MACHINE LEARNING ==

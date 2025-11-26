@@ -71,6 +71,7 @@ For advanced functionality, reference these specific implementations:
 | | contacts_tool.py | 314-579 | Managing linked entities |
 | **Natural Language Dates** | reminder_tool.py | 849-917 | Parsing "tomorrow", "next week", etc. |
 | **LLM Integration** | webaccess_tool.py | 800-950 | Using LLM for content analysis and processing |
+| **Config Validation** | email_tool.py | 244-341 | Connection testing, auto-discovery of settings |
 | **Batch Operations** | - | - | *Not yet implemented - good opportunity!* |
 | **Rate Limiting** | - | - | *Not yet implemented - good opportunity!* |
 
@@ -523,6 +524,52 @@ def __init__(self, working_memory: Optional["WorkingMemory"] = None):
 Supported types: `LLMProvider`, `LLMBridge`, `ToolRepository`, `WorkingMemory`
 
 ToolRepository automatically injects these when creating instances.
+
+### Config Validation (Optional)
+
+**See email_tool.py:244-341** for IMAP connection testing and folder auto-discovery.
+
+Tools that need custom validation (connection tests, auto-discovery) can override the `validate_config` classmethod. This is called by the `/actions/tools/{tool}/validate` API endpoint.
+
+```python
+@classmethod
+def validate_config(cls, config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate configuration and return discovered data.
+
+    Args:
+        config: The configuration dict to validate
+
+    Returns:
+        Dict with discovered data (e.g., {"folders": [...], "connection_test": "success"})
+
+    Raises:
+        ValueError: If validation fails (e.g., bad credentials, unreachable server)
+    """
+    # Example: Test a connection
+    server = config.get("server")
+    password = config.get("password")
+
+    if not server or not password:
+        raise ValueError("Missing required fields: server, password")
+
+    try:
+        # Your connection test logic here
+        connection = connect_to_server(server, password)
+        discovered_settings = connection.discover()
+        return {
+            "connection_test": "success",
+            "discovered": discovered_settings
+        }
+    except ConnectionError as e:
+        raise ValueError(f"Connection failed: {e}")
+```
+
+**Key points:**
+- Use `@classmethod` - validation happens before tool instantiation
+- Return discovered data that the frontend can use (folders, capabilities, etc.)
+- Raise `ValueError` with helpful messages on failure - these are shown to users
+- The base `Tool` class returns `{}` by default (no validation needed)
 
 ## Common Failure Patterns
 

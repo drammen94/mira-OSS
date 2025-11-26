@@ -222,13 +222,18 @@ class LTMemoryFactory:
             )
             self._service_init_order.append(self.consolidation_handler)
 
+            logger.debug("Initializing EntityExtractor...")
+            self.entity_extractor = EntityExtractor()
+            self._service_init_order.append(self.entity_extractor)
+
             logger.debug("Initializing result handlers...")
             self.extraction_result_handler = ExtractionBatchResultHandler(
                 anthropic_client=self._anthropic_client,
                 memory_processor=self.memory_processor,
                 vector_ops=self.vector_ops,
                 db=self.db,
-                linking_service=self.linking
+                linking_service=self.linking,
+                entity_extractor=self.entity_extractor
             )
             self._service_init_order.append(self.extraction_result_handler)
 
@@ -272,9 +277,6 @@ class LTMemoryFactory:
 
         try:
             logger.debug("Initializing EntityGCService...")
-            self.entity_extractor = EntityExtractor()
-            self._service_init_order.append(self.entity_extractor)
-
             self.entity_gc = EntityGCService(
                 config=self.config.entity_gc,
                 db=self.db,

@@ -469,7 +469,7 @@ class BGERerankerPool:
 # Singleton factory function
 def get_bge_reranker(model_name: str = "BAAI/bge-reranker-base",
                      model_path: Optional[str] = None,
-                     use_fp16: bool = True,
+                     use_fp16: bool = False,
                      cache_dir: Optional[str] = None,
                      thread_limit: Optional[int] = 4,
                      pool_size: Optional[int] = None) -> BGERerankerPool:

@@ -15,7 +15,7 @@ class ApiConfig(BaseModel):
     """Anthropic API configuration settings."""
 
     # Model configuration
-    model: str = Field(default="claude-sonnet-4-5-20250929", description="Anthropic reasoning model for complex operations")
+    model: str = Field(default="claude-opus-4-5-20251101", description="Anthropic reasoning model for complex operations")
     execution_model: str = Field(default="openai/gpt-oss-20b", description="Faster model for simple tool operations (dynamic routing)")
     execution_endpoint: str = Field(default="https://api.groq.com/openai/v1/chat/completions", description="OpenAI-compatible endpoint for execution model")
     execution_api_key_name: str = Field(default="groq_key", description="Vault key name for execution model API key")

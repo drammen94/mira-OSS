@@ -156,7 +156,6 @@ class DataEndpoint(BaseHandler):
     def _get_dashboard(self, **params) -> Dict[str, Any]:
         """Get dashboard data - system health and context usage metrics."""
         from clients.postgres_client import PostgresClient
-        from cns.infrastructure.continuum_repository import get_continuum_repository
         from config.config import get_config
 
         user_id = get_current_user_id()
@@ -169,29 +168,16 @@ class DataEndpoint(BaseHandler):
         except Exception:
             db_healthy = False
 
-        # Get context usage from continuum runtime metrics
-        repo = get_continuum_repository()
-        continuum = repo.get_continuum(user_id)
+        # Context usage metrics are managed by Anthropic's prompt caching
+        # Token tracking is stateless - cache markers are applied unconditionally
+        # and Anthropic handles threshold logic server-side
         config = get_config()
-
-        current_tokens = 0
-        cached_tokens = 0
-        max_tokens = config.context_window_tokens
-
-        if continuum:
-            current_tokens = continuum._cumulative_tokens
-            cached_tokens = continuum._cached_up_to_tokens
-
-        # Calculate percentage used
-        percentage_used = (current_tokens / max_tokens * 100) if max_tokens > 0 else 0
 
         return {
             "system_health": "healthy" if db_healthy else "degraded",
             "context_usage": {
-                "current_tokens": current_tokens,
-                "cached_tokens": cached_tokens,
-                "max_tokens": max_tokens,
-                "percentage_used": round(percentage_used, 2)
+                "max_tokens": config.context_window_tokens,
+                "note": "Token tracking delegated to Anthropic prompt caching"
             },
             "meta": {
                 "timestamp": format_utc_iso(utc_now())

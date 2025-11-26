@@ -11,11 +11,11 @@ import threading
 import uuid
 from typing import Dict, Any, Optional, List, TYPE_CHECKING
 
+from json_repair import repair_json
 from pydantic import BaseModel, Field
 
 from tools.repo import Tool
 from tools.registry import registry
-from clients.valkey_client import get_valkey_client
 from utils.user_context import get_current_user_id, get_current_user
 from utils.timezone_utils import utc_now, format_utc_iso
 
@@ -45,9 +45,27 @@ class GetContextToolConfig(BaseModel):
         default=5,
         description="Minimum iterations for deep mode before checking completion"
     )
-    search_result_ttl: int = Field(
+    search_timeout_seconds: int = Field(
         default=300,
-        description="TTL for search results in Valkey (seconds)"
+        description="Maximum duration for async search before reporting timeout to trinket"
+    )
+    conversation_max_results: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Maximum results per conversation search"
+    )
+    memory_max_results: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Maximum results per memory search"
+    )
+    web_max_results: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum results per web search"
     )
 
 
@@ -98,6 +116,27 @@ Be systematic and thorough."""
             max_tokens=1000
         )
 
+    def _safe_parse_json(self, content: str, fallback: Any = None) -> Any:
+        """Parse JSON with repair fallback for malformed LLM responses.
+
+        Args:
+            content: Raw string content from LLM
+            fallback: Value to return if parsing fails completely
+
+        Returns:
+            Parsed JSON or fallback value
+        """
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            self.logger.debug("JSON parse failed, attempting repair")
+            try:
+                repaired = repair_json(content)
+                return json.loads(repaired)
+            except (json.JSONDecodeError, Exception) as e:
+                self.logger.warning(f"JSON repair failed: {e}")
+                return fallback
+
     def plan_search(self, query: str, search_scope: List[str]) -> Dict[str, Any]:
         """Create initial search plan."""
         prompt = f"""
@@ -127,7 +166,14 @@ Return JSON:
         )
 
         content = client.extract_text_content(response)
-        return json.loads(content)
+        # Fallback plan if parsing fails
+        fallback_plan = {
+            "entities": [],
+            "concepts": [],
+            "source_priority": search_scope,
+            "strategy": "Direct search"
+        }
+        return self._safe_parse_json(content, fallback_plan)
 
     def determine_next_search(self, original_query: str, plan: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Determine what to search next."""
@@ -166,8 +212,10 @@ Return JSON or null if search is complete:
         if content == "null" or not content:
             return None
 
-        next_search = json.loads(content)
-        self.search_history.append(next_search)
+        # If parsing fails, return None (search complete)
+        next_search = self._safe_parse_json(content, None)
+        if next_search:
+            self.search_history.append(next_search)
         return next_search
 
     def is_search_complete(self, query: str) -> tuple[bool, str]:
@@ -203,8 +251,10 @@ Return JSON:
         )
 
         content = client.extract_text_content(response)
-        result = json.loads(content)
-        return result['complete'], result['reason']
+        # Fallback: assume complete if parsing fails (avoid infinite loop)
+        fallback = {"complete": True, "reason": "Evaluation parsing failed, assuming complete"}
+        result = self._safe_parse_json(content, fallback)
+        return result.get('complete', True), result.get('reason', 'Unknown')
 
     def add_to_scratchpad(self, source: str, findings: List[Dict[str, Any]]):
         """Add findings to scratchpad progressively."""
@@ -274,7 +324,16 @@ Return JSON:
         )
 
         content = client.extract_text_content(response)
-        return json.loads(content)
+        # Fallback summary if parsing fails
+        fallback = {
+            "query": query,
+            "summary": f"Found {len(self.scratchpad)} items but summary generation failed",
+            "key_findings": [],
+            "sources_searched": list(set(item['source'] for item in self.scratchpad)),
+            "confidence": 0.3,
+            "limitations": "Summary parsing failed"
+        }
+        return self._safe_parse_json(content, fallback)
 
     def _summarize_scratchpad_for_evaluation(self) -> str:
         """Summarize scratchpad for completion evaluation."""
@@ -362,7 +421,6 @@ class GetContextTool(Tool):
         self.logger = logging.getLogger(__name__)
         self.tool_repo = tool_repo
         self.working_memory = working_memory
-        self.valkey = get_valkey_client()
 
         # Load config
         from config.config_manager import config
@@ -437,7 +495,7 @@ class GetContextTool(Tool):
         Thread owns its outcome - publishes success, timeout, or failure events directly.
         """
         start_time = utc_now()
-        timeout_seconds = self.config.search_result_ttl  # 300 seconds (5 minutes)
+        timeout_seconds = self.config.search_timeout_seconds
 
         try:
             self.logger.info(f"Starting context search {task_id[:8]} for query: {query}")
@@ -488,13 +546,15 @@ class GetContextTool(Tool):
 
                 self.logger.debug(f"Iteration {iteration}: Searching {next_search['source']} for: {next_search['query']}")
 
-                # Execute search based on source
+                # Execute search based on source, passing entities from plan
+                plan_entities = search_plan.get('entities', [])
+
                 if next_search['source'] == 'conversation' and 'conversation' in search_scope:
-                    results = self._search_conversation(next_search['query'])
+                    results = self._search_conversation(next_search['query'], entities=plan_entities)
                     agent.add_to_scratchpad('conversation', results)
 
                 elif next_search['source'] == 'memory' and 'memory' in search_scope:
-                    results = self._search_memory(next_search['query'])
+                    results = self._search_memory(next_search['query'], entities=plan_entities)
                     agent.add_to_scratchpad('memory', results)
 
                 elif next_search['source'] == 'web' and 'web' in search_scope:
@@ -538,8 +598,13 @@ class GetContextTool(Tool):
                 error_type=type(e).__name__
             )
 
-    def _search_conversation(self, query: str) -> List[Dict[str, Any]]:
-        """Use continuumsearch_tool to search conversation history."""
+    def _search_conversation(self, query: str, entities: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Use continuumsearch_tool to search conversation history.
+
+        Args:
+            query: Search query
+            entities: Optional list of entities to boost in search results
+        """
         if not self.tool_repo:
             self.logger.warning("No tool repository available for conversation search")
             return []
@@ -549,12 +614,18 @@ class GetContextTool(Tool):
             operation='search',
             query=query,
             search_mode='summaries',
-            max_results=5
+            entities=entities or [],
+            max_results=self.config.conversation_max_results
         )
         return result.get('results', [])
 
-    def _search_memory(self, query: str) -> List[Dict[str, Any]]:
-        """Search long-term memory using continuumsearch_tool."""
+    def _search_memory(self, query: str, entities: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Search long-term memory using continuumsearch_tool.
+
+        Args:
+            query: Search query
+            entities: Optional list of entities (accepted for consistency, not used in memory search)
+        """
         if not self.tool_repo:
             self.logger.warning("No tool repository available for memory search")
             return []
@@ -564,7 +635,8 @@ class GetContextTool(Tool):
             operation='search',
             query=query,
             search_mode='memories',
-            max_results=5
+            entities=entities or [],
+            max_results=self.config.memory_max_results
         )
         return result.get('results', [])
 
@@ -578,7 +650,7 @@ class GetContextTool(Tool):
         result = tool.run(
             operation='web_search',
             query=query,
-            max_results=3
+            max_results=self.config.web_max_results
         )
         return result.get('results', [])
 

@@ -1282,7 +1282,7 @@ class WebAccessTool(Tool):
         self.logger.debug("Extracting content with Groq LLM")
 
         # Get config and API key for Groq
-        from config.config import config
+        from config import config
         from clients.vault_client import get_api_key
         from clients.llm_provider import LLMProvider
 

@@ -166,6 +166,12 @@ class ContinuumPool:
                 continuum._thinking_budget_preference = thinking_budget
                 logger.debug(f"Loaded thinking budget {thinking_budget} for continuum {continuum.id}")
 
+            # Load model preference from Valkey (works for both new and continuing sessions)
+            model_preference = self.valkey_cache.get_model_preference()
+            if model_preference is not None:
+                continuum._model_preference = model_preference
+                logger.debug(f"Loaded model preference {model_preference} for continuum {continuum.id}")
+
             return continuum
     
     def begin_work(self, continuum: Continuum) -> UnitOfWork:
@@ -272,6 +278,37 @@ class ContinuumPool:
         """
         self.valkey_cache.set_thinking_budget(budget)
         logger.info(f"Set thinking budget preference to {budget}")
+
+    def get_model_preference(self) -> Optional[str]:
+        """
+        Get model preference from Valkey cache.
+
+        Requires: Active user context (set via set_current_user_id during authentication)
+
+        Returns:
+            Model identifier if set, None for system default
+
+        Raises:
+            RuntimeError: If no user context is set
+        """
+        return self.valkey_cache.get_model_preference()
+
+    def set_model_preference(self, model: Optional[str]) -> None:
+        """
+        Set model preference in Valkey cache.
+
+        Persists until segment timeout invalidates the session.
+
+        Args:
+            model: Model identifier (None to use system default)
+
+        Requires: Active user context (set via set_current_user_id during authentication)
+
+        Raises:
+            RuntimeError: If no user context is set
+        """
+        self.valkey_cache.set_model_preference(model)
+        logger.info(f"Set model preference to {model}")
 
     def get_session_info(self, user_id: str) -> Dict[str, Any]:
         """

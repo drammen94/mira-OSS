@@ -331,12 +331,21 @@ def register_timeout_job(scheduler_service, event_bus: EventBus) -> bool:
         RuntimeError: If scheduler service or event bus are not properly initialized
     """
     from apscheduler.triggers.interval import IntervalTrigger
+    from utils.scheduled_task_monitor import ScheduledTaskMonitor
 
     timeout_service = get_timeout_service(event_bus)
 
-    success = scheduler_service.register_job(
+    # Wrap with monitoring and timeout (4 minutes for a 5-minute interval job)
+    monitored_check_timeouts = ScheduledTaskMonitor.wrap_scheduled_job(
         job_id="segment_timeout_detection",
         func=timeout_service.check_timeouts,
+        timeout_seconds=240,  # Kill if running longer than 4 minutes
+        kill_on_timeout=True
+    )
+
+    success = scheduler_service.register_job(
+        job_id="segment_timeout_detection",
+        func=monitored_check_timeouts,
         trigger=IntervalTrigger(minutes=5),
         component="cns",
         description="Check for timed-out active segments every 5 minutes"

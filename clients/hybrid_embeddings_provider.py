@@ -141,7 +141,7 @@ class HybridEmbeddingsProvider:
             from clients.embeddings.bge_reranker import get_bge_reranker
             self._reranker = get_bge_reranker(
                 model_name="BAAI/bge-reranker-base",
-                use_fp16=True,  # Default to FP16 for efficiency
+                use_fp16=False,  # FP16 has compatibility issues with some ONNXRuntime versions
                 cache_dir=config.embeddings.deep_model.cache_dir,
                 thread_limit=config.embeddings.deep_model.thread_limit
             )

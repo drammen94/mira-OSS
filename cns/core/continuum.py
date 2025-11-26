@@ -27,9 +27,8 @@ class Continuum:
         """Initialize continuum with state."""
         self._state = state
         self._message_cache = []  # Hot cache of recent messages
-        self._cumulative_tokens = 0  # Running token count for cache breakpoint calculation
-        self._cached_up_to_tokens = 0  # Tracks how many tokens are already cached
         self._thinking_budget_preference: Optional[int] = None  # User's thinking budget preference for this conversation
+        self._model_preference: Optional[str] = None  # User's model preference for this conversation
 
     @classmethod
     def create_new(cls, user_id: str) -> 'Continuum':
@@ -91,6 +90,27 @@ class Continuum:
             raise ValueError("Thinking budget must be None, 0, or a positive integer")
         self._thinking_budget_preference = budget
         logger.debug(f"Set thinking budget preference to {budget} for continuum {self.id}")
+
+    @property
+    def model_preference(self) -> Optional[str]:
+        """
+        Get user's model preference for this conversation.
+
+        Returns:
+            None: Use system config default
+            str: Model identifier to use
+        """
+        return self._model_preference
+
+    def set_model_preference(self, model: Optional[str]) -> None:
+        """
+        Set user's model preference for this conversation.
+
+        Args:
+            model: None (system default) or model identifier string
+        """
+        self._model_preference = model
+        logger.debug(f"Set model preference to {model} for continuum {self.id}")
 
     def apply_cache(self, messages: List[Message]) -> None:
         """
@@ -183,24 +203,6 @@ class Continuum:
             metadata=metadata
         )
 
-    def add_tokens(self, token_count: int) -> None:
-        """
-        Add tokens to cumulative count for cache breakpoint calculation.
-
-        Args:
-            token_count: Number of tokens to add (typically from API response usage)
-        """
-        self._cumulative_tokens += token_count
-
-    def mark_cached(self) -> None:
-        """
-        Mark that all cumulative tokens have been successfully cached.
-
-        Called after a successful API response when cache_control was applied.
-        """
-        self._cached_up_to_tokens = self._cumulative_tokens
-        logger.debug(f"Marked {self._cached_up_to_tokens} tokens as cached")
-    
     def get_messages_for_api(self) -> List[dict]:
         """Get messages formatted for LLM API with proper prefixes and cache control."""
         from cns.services.segment_helpers import format_segment_for_display
@@ -245,29 +247,22 @@ class Continuum:
                     "content": content
                 })
 
-        # Apply ultra-fine-grained caching: cache everything once we hit 1024 tokens
-        # ALWAYS apply cache_control to maintain and grow the cache
-        if self._cumulative_tokens >= 1024:
-            # Find last assistant message and mark it for caching
-            for i in range(len(formatted_messages) - 1, -1, -1):
-                if formatted_messages[i]["role"] == "assistant":
-                    content = formatted_messages[i]["content"]
+        # Apply cache_control to last assistant message for conversation history caching
+        # Anthropic ignores cache markers on content < 1024 tokens, so always mark
+        # and let the API handle threshold logic. This keeps us stateless per-request.
+        for i in range(len(formatted_messages) - 1, -1, -1):
+            if formatted_messages[i]["role"] == "assistant":
+                content = formatted_messages[i]["content"]
 
-                    # Ensure content is structured as blocks (required for cache_control)
-                    if isinstance(content, str):
-                        # Convert string content to structured block
-                        content = [{"type": "text", "text": content}]
+                # Ensure content is structured as blocks (required for cache_control)
+                if isinstance(content, str):
+                    content = [{"type": "text", "text": content}]
 
-                    # Apply cache_control to the last content block
-                    if isinstance(content, list) and len(content) > 0:
-                        content[-1]["cache_control"] = {"type": "ephemeral"}
-                        formatted_messages[i]["content"] = content
-                        logger.debug(
-                            f"Applied ultra-fine cache control to message {i} "
-                            f"(cumulative: {self._cumulative_tokens} tokens, "
-                            f"cached: {self._cached_up_to_tokens} tokens)"
-                        )
-                    break
+                # Apply cache_control to the last content block
+                if isinstance(content, list) and len(content) > 0:
+                    content[-1]["cache_control"] = {"type": "ephemeral"}
+                    formatted_messages[i]["content"] = content
+                break
 
         return formatted_messages
     

@@ -6,6 +6,7 @@ batch processing, and refinement operations.
 """
 import logging
 from apscheduler.triggers.interval import IntervalTrigger
+from utils.scheduled_task_monitor import ScheduledTaskMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +57,17 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> bool:
             result_processor=lt_memory_factory.extraction_result_handler
         )
 
-    success_extraction_poll = scheduler_service.register_job(
+    # Wrap with monitoring and timeout (45 seconds for a 1-minute interval job)
+    monitored_extraction_poll = ScheduledTaskMonitor.wrap_scheduled_job(
         job_id="lt_memory_extraction_batch_polling",
         func=poll_extraction_batches_with_handler,
+        timeout_seconds=45,  # Kill if running longer than 45 seconds
+        kill_on_timeout=True
+    )
+
+    success_extraction_poll = scheduler_service.register_job(
+        job_id="lt_memory_extraction_batch_polling",
+        func=monitored_extraction_poll,
         trigger=IntervalTrigger(minutes=1),
         component="lt_memory",
         description="Poll Anthropic Batch API for extraction results every 1 minute"
@@ -75,9 +84,17 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> bool:
             result_processor=lt_memory_factory.relationship_result_handler
         )
 
-    success_linking_poll = scheduler_service.register_job(
+    # Wrap with monitoring and timeout (45 seconds for a 1-minute interval job)
+    monitored_relationship_poll = ScheduledTaskMonitor.wrap_scheduled_job(
         job_id="lt_memory_linking_batch_polling",
         func=poll_relationship_batches_with_handler,
+        timeout_seconds=45,  # Kill if running longer than 45 seconds
+        kill_on_timeout=True
+    )
+
+    success_linking_poll = scheduler_service.register_job(
+        job_id="lt_memory_linking_batch_polling",
+        func=monitored_relationship_poll,
         trigger=IntervalTrigger(minutes=1),
         component="lt_memory",
         description="Poll Anthropic Batch API for relationship results every 1 minute"

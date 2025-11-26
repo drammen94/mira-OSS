@@ -137,7 +137,7 @@ class SegmentCacheLoader:
         max_count = config.system.session_summary_max_count
         query_window = config.system.session_summary_query_window
 
-        # Query window of recent segments (newest first)
+        # Query window of recent segments (returns oldest first, we reverse for selection)
         candidates = self.repository.find_collapsed_segments(
             continuum_id,
             user_id,
@@ -152,7 +152,7 @@ class SegmentCacheLoader:
         selected = []
         total_complexity = 0
 
-        for segment in candidates:
+        for segment in reversed(candidates):
             # Get complexity score, default to 2 (moderate) if missing
             complexity = segment.metadata.get('complexity_score', 2)
 

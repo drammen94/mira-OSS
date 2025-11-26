@@ -431,6 +431,48 @@ class LLMProvider:
         tools_copy[-1]["cache_control"] = {"type": "ephemeral"}
         return tools_copy
 
+    def _strip_tool_content(self, messages: List[Dict]) -> List[Dict]:
+        """
+        Strip tool_use and tool_result blocks from messages for execution model.
+
+        The execution model should only see text content to prevent it from
+        attempting tool calls when tools aren't provided.
+
+        Args:
+            messages: Anthropic-format messages with potential tool content
+
+        Returns:
+            Messages with only text content preserved
+        """
+        stripped = []
+        for msg in messages:
+            content = msg.get("content")
+
+            # Handle string content (already text-only)
+            if isinstance(content, str):
+                stripped.append(msg)
+                continue
+
+            # Handle list content - filter to text blocks only
+            if isinstance(content, list):
+                text_blocks = [
+                    block for block in content
+                    if isinstance(block, dict) and block.get("type") == "text"
+                ]
+                # Skip message entirely if no text content remains
+                if not text_blocks:
+                    continue
+                # Simplify to string if only one text block
+                if len(text_blocks) == 1:
+                    stripped.append({**msg, "content": text_blocks[0].get("text", "")})
+                else:
+                    stripped.append({**msg, "content": text_blocks})
+            else:
+                # Unknown format, pass through
+                stripped.append(msg)
+
+        return stripped
+
     def generate_response(
         self,
         messages: List[Dict[str, str]],
@@ -773,14 +815,26 @@ class LLMProvider:
         # Select model (use override if provided, otherwise default to reasoning model)
         selected_model = model_override if model_override else self.model
 
-        # Route execution model to OpenRouter (non-streaming)
+        # Route execution model to OpenRouter (non-streaming, no tools - text generation only)
         if selected_model == self.execution_model and self.execution_api_key:
             self.logger.debug(f"Routing execution model to OpenRouter: {self.execution_model}")
+            # Strip tool content from messages to prevent model from attempting tool calls
+            execution_messages = self._strip_tool_content(messages)
+            # Use task-focused system prompt - full prompt contains tool descriptions that
+            # cause the model to generate tool calls even when tools array is empty.
+            # Execution model's role: synthesize tool results into user-facing response.
+            execution_system = (
+                "You are an AI assistant responding to the user. Tools have already been "
+                "executed and their results are reflected in the conversation. Your task is "
+                "to synthesize this information into a clear, helpful response. "
+                "Do not attempt to call tools or generate JSON - respond conversationally."
+            )
             response = self._generate_non_streaming(
-                messages, tools,
+                execution_messages, None,  # No tools - execution model only generates text responses
                 endpoint_url=self.execution_endpoint,
                 model_override=self.execution_model,
                 api_key_override=self.execution_api_key,
+                system_override=execution_system,
                 **kwargs
             )
             yield from self._emit_events_from_response(response)
@@ -932,9 +986,15 @@ class LLMProvider:
         current_messages = messages.copy()
         last_response = None  # Track previous response for model selection
 
+        # Check for user model preference (overrides dynamic selection)
+        user_model_preference = kwargs.get('model_preference')
+
         while True:
-            # Select model based on previous response
-            selected_model = self._select_model(last_response)
+            # Select model: user preference takes precedence, otherwise dynamic selection
+            if user_model_preference:
+                selected_model = user_model_preference
+            else:
+                selected_model = self._select_model(last_response)
 
             # Stream LLM response with selected model
             response = None

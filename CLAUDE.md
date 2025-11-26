@@ -1,7 +1,7 @@
 # MIRA - Python Project Guide
 MIRA is a FastAPI application with event-driven architecture coordinating three core systems: CNS (conversation management via immutable Continuum aggregate), Working Memory (trinket-based system prompt composition), and LT_Memory (batch memory extraction/linking/refinement). PostgreSQL RLS with contextvars provides automatic user isolation - all user-scoped queries, tool access, and repository operations enforce `user_id` filtering at the database level.
 
-The User's name is [YOUR_NAME].
+The User's name is Taylor.
 
 ## 🚨 Critical Principles (Non-Negotiable)
 ### Technical Integrity
@@ -141,7 +141,7 @@ When modifying files, edit as if new code was always intended - never reference 
 - **Lint**: `flake8`
 - **Type check**: `mypy .`
 - **Format**: `black .`
-- **Database**: Always use `psql -U postgres -h localhost -d mira_service` - postgres is the default superuser, mira_service is the primary database (adjust username based on your PostgreSQL installation)
+- **Database**: Always use `psql -U taylut -h localhost -d mira_service` - taylut is the superuser, mira_service is the primary database
 
 ### Git Workflow
 - **MANDATORY**: Invoke the `git-workflow` skill BEFORE every commit

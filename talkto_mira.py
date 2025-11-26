@@ -44,12 +44,6 @@ import requests
 
 from clients.vault_client import get_api_key
 
-# Test user constants (from test fixtures)
-TEST_USER_1_EMAIL = "test@example.com"
-TEST_USER_1_ID = "443a898d-ed56-495a-b9de-0551c80169fe"
-TEST_USER_2_EMAIL = "test2@example.com"
-TEST_USER_2_ID = "7b8e4c2a-f3d1-4a5b-9e6c-1d2f3a4b5c6d"
-
 # Configuration
 MIRA_API_URL = os.getenv("MIRA_API_URL", "http://localhost:1993")
 REQUEST_TIMEOUT = 120  # seconds
@@ -67,8 +61,8 @@ RESET_PROMPT = "\001\033[0m\002"
 # Plain ANSI codes for print statements
 CYAN = "\033[36m"
 GREEN = "\033[32m"
-BOLD = "\033[1m"
 RED = "\033[31m"
+BOLD = "\033[1m"
 RESET = "\033[0m"
 
 
@@ -256,7 +250,7 @@ def show_boot_screen() -> None:
         "@@@@@@@        @@        @@@@@@         @      @@@@@@@@@@@    @@@@@@      @@@@@@",
         "@@ @  @        @@        @@@@@@        @ @     @@@@@@@@@@@    @    @      @@@@@@",
         "@@ @  @        @@        @   @        @ @@@    @@@@@@@@@@@    @@@@@@      @@@@@@",
-        "                                                @@@@@@@@@@@                      "
+        "                                               @@@@@@@@@@@                       "
     ]
 
     # Center vertically
@@ -311,13 +305,12 @@ def start_api_server() -> subprocess.Popen:
     if not main_py.exists():
         raise RuntimeError(f"Cannot find main.py at {main_py}")
 
-    # Start the server process with stderr captured for error reporting
+    # Start the server process with output suppressed
     _server_process = subprocess.Popen(
         [sys.executable, str(main_py)],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        cwd=str(project_root),
-        text=True
+        stderr=subprocess.DEVNULL,
+        cwd=str(project_root)
     )
 
     return _server_process
@@ -330,32 +323,11 @@ def wait_for_api_ready(timeout: int = SERVER_STARTUP_TIMEOUT) -> bool:
         timeout: Maximum seconds to wait
 
     Returns:
-        bool: True if server became ready, False if timeout or process died
+        bool: True if server became ready, False if timeout
     """
-    global _server_process
     start_time = time.time()
 
     while time.time() - start_time < timeout:
-        # Check if process has died
-        if _server_process and _server_process.poll() is not None:
-            # Process exited - read stderr for error details
-            stderr_output = ""
-            if _server_process.stderr:
-                stderr_output = _server_process.stderr.read()
-
-            # Extract the most relevant error line
-            error_lines = [l for l in stderr_output.split('\n') if l.strip()]
-            if error_lines:
-                # Find lines with common error indicators
-                for line in reversed(error_lines):
-                    if any(x in line for x in ['Error', 'Exception', 'error:', 'failed']):
-                        print(f"\n{RED}Server startup failed:{RESET} {line.strip()}")
-                        break
-                else:
-                    # No specific error found, show last line
-                    print(f"\n{RED}Server startup failed:{RESET} {error_lines[-1].strip()}")
-            return False
-
         if is_api_running():
             return True
         time.sleep(0.5)
@@ -379,59 +351,6 @@ def shutdown_server():
             pass  # Already terminated
         finally:
             _server_process = None
-
-
-def select_user() -> dict:
-    """Prompt user to select which MIRA user to chat as.
-
-    Returns:
-        dict with 'name' and 'email' keys
-    """
-    clear_screen()
-    print(f"{CYAN}═══════════════════════════════════{RESET}")
-    print(f"{BOLD}     Select User{RESET}")
-    print(f"{CYAN}═══════════════════════════════════{RESET}\n")
-
-    print(f"  {GREEN}1.{RESET} Main User")
-    print(f"  {GREEN}2.{RESET} Test User 1 ({TEST_USER_1_EMAIL})")
-    print(f"  {GREEN}3.{RESET} Test User 2 ({TEST_USER_2_EMAIL})")
-    print()
-
-    while True:
-        try:
-            choice = input(f"{CYAN}Select user (1-3):{RESET} ").strip()
-            if choice == "1":
-                return {"name": "Main User", "email": "main"}
-            elif choice == "2":
-                return {"name": "Test User 1", "email": TEST_USER_1_EMAIL}
-            elif choice == "3":
-                return {"name": "Test User 2", "email": TEST_USER_2_EMAIL}
-            else:
-                print(f"  {RED}Invalid choice. Please enter 1, 2, or 3.{RESET}")
-        except KeyboardInterrupt:
-            print("\n\nGoodbye!")
-            sys.exit(0)
-
-
-def get_token_for_user(user_selection: dict) -> str:
-    """Get API key from Vault for single-user OSS mode.
-
-    Args:
-        user_selection: User selection dict (unused in single-user mode)
-
-    Returns:
-        str: API key from Vault
-
-    Raises:
-        RuntimeError: If API key cannot be retrieved
-    """
-    try:
-        api_key = get_api_key('mira_api')
-        if not api_key:
-            raise RuntimeError("API key 'mira_api' not found in Vault")
-        return api_key
-    except Exception as e:
-        raise RuntimeError(f"Failed to retrieve API key from Vault: {e}")
 
 
 def one_shot(token: str, message: str) -> None:

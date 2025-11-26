@@ -7,16 +7,11 @@ Tool hints are always visible via working memory, enabling intelligent loading d
 """
 
 # Standard library imports
-import json
 import logging
-from typing import Dict, List, Any, Optional, TYPE_CHECKING
-
-# Third-party imports
-from pydantic import BaseModel, Field
+from typing import Dict, Any, Optional, TYPE_CHECKING
 
 # Local imports
 from tools.repo import Tool
-from tools.registry import registry
 
 # Type checking imports
 if TYPE_CHECKING:
@@ -24,25 +19,8 @@ if TYPE_CHECKING:
     from working_memory.core import WorkingMemory
 
 
-# -------------------- CONFIGURATION --------------------
-
-class InvokeOtherToolConfig(BaseModel):
-    """
-    Configuration for the invokeother_tool.
-
-    Defines the parameters that control the dynamic tool loader's behavior.
-    """
-    enabled: bool = Field(
-        default=True,
-        description="Whether this tool is enabled by default"
-    )
-    idle_threshold: int = Field(
-        default=5,
-        description="Number of turns before an unused tool is automatically unloaded"
-    )
-
-# Register with registry
-registry.register("invokeother_tool", InvokeOtherToolConfig)
+# Configuration for invokeother_tool is defined in config/config.py (ToolConfig.invokeother_tool)
+# This tool is special-cased there rather than using registry self-registration
 
 
 # -------------------- MAIN TOOL CLASS --------------------
@@ -95,9 +73,8 @@ class InvokeOtherTool(Tool):
         self.tool_repo = tool_repo
         self.working_memory = working_memory
 
-        # Get configuration
-        from config.config_manager import config
-        self.config = config.tools.invokeother_tool
+        # Get essential tools list from config
+        from config import config
         self.essential_tools = config.tools.essential_tools
 
         # Initialize tool hints in working memory on first load

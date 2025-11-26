@@ -400,10 +400,10 @@ EOF
 
         # Ensure role-id and secret-id files exist
         if [ ! -f /opt/vault/role-id.txt ]; then
-            vault read auth/approle/role/mira/role-id > /opt/vault/role-id.txt
+            vault read -field=role_id auth/approle/role/mira/role-id > /opt/vault/role-id.txt
         fi
         if [ ! -f /opt/vault/secret-id.txt ]; then
-            vault write -f auth/approle/role/mira/secret-id > /opt/vault/secret-id.txt
+            vault write -field=secret_id -f auth/approle/role/mira/secret-id > /opt/vault/secret-id.txt
         fi
 
         return 0
@@ -448,8 +448,8 @@ EOF
         vault write auth/approle/role/mira policies="mira-policy" token_ttl=1h token_max_ttl=4h
 
     # Extract credentials
-    vault read auth/approle/role/mira/role-id > /opt/vault/role-id.txt
-    vault write -f auth/approle/role/mira/secret-id > /opt/vault/secret-id.txt
+    vault read -field=role_id auth/approle/role/mira/role-id > /opt/vault/role-id.txt
+    vault write -field=secret_id -f auth/approle/role/mira/secret-id > /opt/vault/secret-id.txt
 }
 
 # Vault helper: Store secret only if it doesn't exist
@@ -471,9 +471,17 @@ vault_put_if_not_exists() {
 # DEPLOYMENT START
 # ============================================================================
 
-# Initialize structured state management (must be before first usage)
-declare -A COMPONENT_CONFIG  # User configuration choices
-declare -A COMPONENT_STATUS  # Component status for summary display
+# Initialize configuration state (using simple variables for Bash 3.x compatibility)
+CONFIG_ANTHROPIC_KEY=""
+CONFIG_GROQ_KEY=""
+CONFIG_INSTALL_PLAYWRIGHT=""
+CONFIG_INSTALL_SYSTEMD=""
+CONFIG_START_MIRA_NOW=""
+STATUS_ANTHROPIC=""
+STATUS_GROQ=""
+STATUS_PLAYWRIGHT=""
+STATUS_SYSTEMD=""
+STATUS_MIRA_SERVICE=""
 
 clear
 echo -e "${BOLD}${CYAN}"
@@ -511,6 +519,23 @@ if [ -d "/opt/mira/app" ]; then
 fi
 
 print_success "Pre-flight checks passed"
+
+# Detect operating system (needed for port stop logic and later steps)
+OS_TYPE=$(uname -s)
+case "$OS_TYPE" in
+    Linux*)
+        OS="linux"
+        ;;
+    Darwin*)
+        OS="macos"
+        ;;
+    *)
+        echo ""
+        print_error "Unsupported operating system: $OS_TYPE"
+        print_info "This script supports Linux (Ubuntu/Debian) and macOS only."
+        exit 1
+        ;;
+esac
 
 print_header "Port Availability Check"
 
@@ -631,22 +656,22 @@ print_info "Get your key at: https://console.anthropic.com/settings/keys"
 echo ""
 read -p "$(echo -e ${CYAN}Enter your Anthropic API key${RESET}) (or press Enter to skip): " ANTHROPIC_KEY_INPUT
 if [ -z "$ANTHROPIC_KEY_INPUT" ]; then
-    COMPONENT_CONFIG[anthropic_key]="PLACEHOLDER_SET_THIS_LATER"
-    COMPONENT_STATUS[anthropic]="${WARNING} NOT SET - You must configure this before using MIRA"
+    CONFIG_ANTHROPIC_KEY="PLACEHOLDER_SET_THIS_LATER"
+    STATUS_ANTHROPIC="${WARNING} NOT SET - You must configure this before using MIRA"
 else
     # Basic validation - check if it looks like an Anthropic key
     if [[ $ANTHROPIC_KEY_INPUT =~ ^sk-ant- ]]; then
-        COMPONENT_CONFIG[anthropic_key]="$ANTHROPIC_KEY_INPUT"
-        COMPONENT_STATUS[anthropic]="${CHECKMARK} Configured"
+        CONFIG_ANTHROPIC_KEY="$ANTHROPIC_KEY_INPUT"
+        STATUS_ANTHROPIC="${CHECKMARK} Configured"
     else
         print_warning "This doesn't look like a valid Anthropic API key (should start with 'sk-ant-')"
         read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y/n): " CONFIRM
         if [[ ! "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
-            COMPONENT_CONFIG[anthropic_key]="PLACEHOLDER_SET_THIS_LATER"
-            COMPONENT_STATUS[anthropic]="${WARNING} NOT SET"
+            CONFIG_ANTHROPIC_KEY="PLACEHOLDER_SET_THIS_LATER"
+            STATUS_ANTHROPIC="${WARNING} NOT SET"
         else
-            COMPONENT_CONFIG[anthropic_key]="$ANTHROPIC_KEY_INPUT"
-            COMPONENT_STATUS[anthropic]="${CHECKMARK} Configured (unvalidated)"
+            CONFIG_ANTHROPIC_KEY="$ANTHROPIC_KEY_INPUT"
+            STATUS_ANTHROPIC="${CHECKMARK} Configured (unvalidated)"
         fi
     fi
 fi
@@ -659,22 +684,22 @@ print_info "Get your key at: https://console.groq.com/keys"
 echo ""
 read -p "$(echo -e ${CYAN}Enter your Groq API key${RESET}) (or press Enter to skip): " GROQ_KEY_INPUT
 if [ -z "$GROQ_KEY_INPUT" ]; then
-    COMPONENT_CONFIG[groq_key]="PLACEHOLDER_SET_THIS_LATER"
-    COMPONENT_STATUS[groq]="${WARNING} NOT SET - You must configure this before using MIRA"
+    CONFIG_GROQ_KEY="PLACEHOLDER_SET_THIS_LATER"
+    STATUS_GROQ="${WARNING} NOT SET - You must configure this before using MIRA"
 else
     # Basic validation - check if it looks like a Groq key
     if [[ $GROQ_KEY_INPUT =~ ^gsk_ ]]; then
-        COMPONENT_CONFIG[groq_key]="$GROQ_KEY_INPUT"
-        COMPONENT_STATUS[groq]="${CHECKMARK} Configured"
+        CONFIG_GROQ_KEY="$GROQ_KEY_INPUT"
+        STATUS_GROQ="${CHECKMARK} Configured"
     else
         print_warning "This doesn't look like a valid Groq API key (should start with 'gsk_')"
         read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y/n): " CONFIRM
         if [[ ! "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
-            COMPONENT_CONFIG[groq_key]="PLACEHOLDER_SET_THIS_LATER"
-            COMPONENT_STATUS[groq]="${WARNING} NOT SET"
+            CONFIG_GROQ_KEY="PLACEHOLDER_SET_THIS_LATER"
+            STATUS_GROQ="${WARNING} NOT SET"
         else
-            COMPONENT_CONFIG[groq_key]="$GROQ_KEY_INPUT"
-            COMPONENT_STATUS[groq]="${CHECKMARK} Configured (unvalidated)"
+            CONFIG_GROQ_KEY="$GROQ_KEY_INPUT"
+            STATUS_GROQ="${CHECKMARK} Configured (unvalidated)"
         fi
     fi
 fi
@@ -691,30 +716,13 @@ if [ -z "$PLAYWRIGHT_INPUT" ]; then
     PLAYWRIGHT_INPUT="y"
 fi
 if [[ "$PLAYWRIGHT_INPUT" =~ ^[Yy](es)?$ ]]; then
-    COMPONENT_CONFIG[install_playwright]="yes"
-    COMPONENT_STATUS[playwright]="${CHECKMARK} Will be installed"
+    CONFIG_INSTALL_PLAYWRIGHT="yes"
+    STATUS_PLAYWRIGHT="${CHECKMARK} Will be installed"
 else
-    COMPONENT_CONFIG[install_playwright]="no"
-    COMPONENT_STATUS[playwright]="${YELLOW}Skipped - webpage extraction unavailable${RESET}"
+    CONFIG_INSTALL_PLAYWRIGHT="no"
+    STATUS_PLAYWRIGHT="${YELLOW}Skipped - webpage extraction unavailable${RESET}"
 fi
 echo ""
-
-# Detect operating system early for systemd prompt
-OS_TYPE=$(uname -s)
-case "$OS_TYPE" in
-    Linux*)
-        OS="linux"
-        ;;
-    Darwin*)
-        OS="macos"
-        ;;
-    *)
-        echo ""
-        print_error "Unsupported operating system: $OS_TYPE"
-        print_info "This script supports Linux (Ubuntu/Debian) and macOS only."
-        exit 1
-        ;;
-esac
 
 # Systemd service option (Linux only)
 echo -e "${BOLD}${BLUE}4. Systemd Service${RESET} ${DIM}(OPTIONAL - Linux Only)${RESET}"
@@ -724,34 +732,34 @@ if [ "$OS" = "linux" ]; then
     echo ""
     read -p "$(echo -e ${CYAN}Install MIRA as systemd service?${RESET}) (y/n): " SYSTEMD_INPUT
     if [[ "$SYSTEMD_INPUT" =~ ^[Yy](es)?$ ]]; then
-        COMPONENT_CONFIG[install_systemd]="yes"
+        CONFIG_INSTALL_SYSTEMD="yes"
         echo ""
         read -p "$(echo -e ${CYAN}Start MIRA service immediately after installation?${RESET}) (y/n): " START_NOW_INPUT
         if [[ "$START_NOW_INPUT" =~ ^[Yy](es)?$ ]]; then
-            COMPONENT_CONFIG[start_mira_now]="yes"
-            COMPONENT_STATUS[systemd]="${CHECKMARK} Will be installed and started"
+            CONFIG_START_MIRA_NOW="yes"
+            STATUS_SYSTEMD="${CHECKMARK} Will be installed and started"
         else
-            COMPONENT_CONFIG[start_mira_now]="no"
-            COMPONENT_STATUS[systemd]="${CHECKMARK} Will be installed (not started)"
+            CONFIG_START_MIRA_NOW="no"
+            STATUS_SYSTEMD="${CHECKMARK} Will be installed (not started)"
         fi
     else
-        COMPONENT_CONFIG[install_systemd]="no"
-        COMPONENT_CONFIG[start_mira_now]="no"
-        COMPONENT_STATUS[systemd]="${RED}Skipped${RESET}"
+        CONFIG_INSTALL_SYSTEMD="no"
+        CONFIG_START_MIRA_NOW="no"
+        STATUS_SYSTEMD="${RED}Skipped${RESET}"
     fi
 elif [ "$OS" = "macos" ]; then
-    COMPONENT_CONFIG[install_systemd]="no"
-    COMPONENT_CONFIG[start_mira_now]="no"
+    CONFIG_INSTALL_SYSTEMD="no"
+    CONFIG_START_MIRA_NOW="no"
     print_info "Systemd service creation only available on Linux (macOS uses launchd)"
-    COMPONENT_STATUS[systemd]="${DIM}Not available on macOS${RESET}"
+    STATUS_SYSTEMD="${DIM}Not available on macOS${RESET}"
 fi
 echo ""
 
 echo -e "${BOLD}Configuration Summary:${RESET}"
-echo -e "  Anthropic:       ${COMPONENT_STATUS[anthropic]}"
-echo -e "  Groq:            ${COMPONENT_STATUS[groq]}"
-echo -e "  Playwright:      ${COMPONENT_STATUS[playwright]}"
-echo -e "  Systemd Service: ${COMPONENT_STATUS[systemd]}"
+echo -e "  Anthropic:       ${STATUS_ANTHROPIC}"
+echo -e "  Groq:            ${STATUS_GROQ}"
+echo -e "  Playwright:      ${STATUS_PLAYWRIGHT}"
+echo -e "  Systemd Service: ${STATUS_SYSTEMD}"
 echo ""
 
 print_header "System Detection"
@@ -815,7 +823,7 @@ if [ "$OS" = "linux" ]; then
     fi
 
     # Detect Python version to use (newest available, 3.12+ required)
-    PYTHON_VER=$(python3 --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
+    PYTHON_VER=$(python3 --version 2>&1 | sed -n 's/Python \([0-9]*\.[0-9]*\).*/\1/p')
 
     if [ "$LOUD_MODE" = true ]; then
         print_step "Updating package lists..."
@@ -864,7 +872,7 @@ elif [ "$OS" = "macos" ]; then
     echo -e "${CHECKMARK}"
 
     # Detect Python version to use (newest available, 3.12+ required)
-    PYTHON_VER=$(python3 --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
+    PYTHON_VER=$(python3 --version 2>&1 | sed -n 's/Python \([0-9]*\.[0-9]*\).*/\1/p')
 
     if [ "$LOUD_MODE" = true ]; then
         print_step "Updating Homebrew..."
@@ -897,7 +905,7 @@ if [ "$OS" = "linux" ]; then
     PYTHON_CMD="python${PYTHON_VER}"
 elif [ "$OS" = "macos" ]; then
     # Detect macOS Python version
-    PYTHON_VER=$(python3 --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
+    PYTHON_VER=$(python3 --version 2>&1 | sed -n 's/Python \([0-9]*\.[0-9]*\).*/\1/p')
 
     # Check common Homebrew locations
     if command -v python${PYTHON_VER} &> /dev/null; then
@@ -1124,7 +1132,7 @@ fi
 
 print_header "Step 7: Playwright Browser Setup"
 
-if [ "${COMPONENT_CONFIG[install_playwright]}" = "yes" ]; then
+if [ "${CONFIG_INSTALL_PLAYWRIGHT}" = "yes" ]; then
     # Check if Playwright Chromium is already installed
     PLAYWRIGHT_CACHE="$HOME/.cache/ms-playwright"
     echo -ne "${DIM}${ARROW}${RESET} Checking Playwright cache... "
@@ -1153,7 +1161,7 @@ if [ "${COMPONENT_CONFIG[install_playwright]}" = "yes" ]; then
             print_warning "Some system dependencies failed to install"
 
             # Extract specific failed packages if possible
-            FAILED_PACKAGES=$(grep -oP "Unable to locate package \K\S+" /tmp/playwright-deps.log 2>/dev/null | head -3 | tr '\n' ' ')
+            FAILED_PACKAGES=$(grep "Unable to locate package" /tmp/playwright-deps.log 2>/dev/null | sed 's/.*Unable to locate package //' | head -3 | tr '\n' ' ')
             if [ -n "$FAILED_PACKAGES" ]; then
                 print_info "Missing packages: $FAILED_PACKAGES"
             fi
@@ -1330,7 +1338,7 @@ cat > /opt/vault/unseal.sh <<'EOF'
 #!/bin/bash
 export VAULT_ADDR='http://127.0.0.1:8200'
 sleep 5
-UNSEAL_KEY=$(awk '/Unseal Key 1:/ {print $NF}' /opt/vault/init-keys.txt)
+UNSEAL_KEY=$(grep 'Unseal Key 1:' /opt/vault/init-keys.txt | awk '{print $4}')
 echo "$UNSEAL_KEY" | vault operator unseal -
 EOF
 echo -e "${CHECKMARK}"
@@ -1504,28 +1512,12 @@ fi
 
 print_success "PostgreSQL configured"
 
-print_header "Step 14: Database Schema"
-
-echo -ne "${DIM}${ARROW}${RESET} Applying database schema... "
-if PGPASSWORD='changethisifdeployingpwd' psql -U mira_admin -h localhost -d mira_service -f /opt/mira/app/deploy/mira_service_schema.sql > /dev/null 2>&1; then
-    echo -e "${CHECKMARK}"
-else
-    echo -e "${ERROR}"
-    print_error "Failed to apply database schema"
-    print_info "Try manually: PGPASSWORD='changethisifdeployingpwd' psql -U mira_admin -h localhost -d mira_service -f /opt/mira/app/deploy/mira_service_schema.sql"
-    exit 1
-fi
-
-print_success "Database schema applied"
-
-print_header "Step 15: Vault Credential Storage"
+print_header "Step 14: Vault Credential Storage"
 
 vault_put_if_not_exists secret/mira/api_keys \
-    anthropic_key="${COMPONENT_CONFIG[anthropic_key]}" \
-    groq_key="${COMPONENT_CONFIG[groq_key]}"
+    anthropic_key="${CONFIG_ANTHROPIC_KEY}" \
+    groq_key="${CONFIG_GROQ_KEY}"
 
-# ⚠️  SECURITY WARNING: Change default passwords before deploying to production!
-# The password "changethisifdeployingpwd" is a placeholder and MUST be replaced with a strong password.
 vault_put_if_not_exists secret/mira/database \
     admin_url="postgresql://mira_admin:changethisifdeployingpwd@localhost:5432/mira_service" \
     password="changethisifdeployingpwd" \
@@ -1538,7 +1530,7 @@ vault_put_if_not_exists secret/mira/services \
 
 print_success "All credentials configured in Vault"
 
-print_header "Step 16: MIRA CLI Setup"
+print_header "Step 15: MIRA CLI Setup"
 
 echo -ne "${DIM}${ARROW}${RESET} Creating mira wrapper script... "
 
@@ -1548,13 +1540,10 @@ cat > /opt/mira/mira.sh <<'WRAPPER_EOF'
 #!/bin/bash
 # MIRA CLI wrapper - sets Vault environment variables for talkto_mira.py
 
-# Set Vault environment variables
+# Set Vault environment variables (files contain just the raw value)
 export VAULT_ADDR='http://127.0.0.1:8200'
-export VAULT_ROLE_ID=$(awk '/role_id/ {print $2}' /opt/vault/role-id.txt)
-export VAULT_SECRET_ID=$(awk '/secret_id / {print $2}' /opt/vault/secret-id.txt)
-
-# Change to app directory for relative path resolution
-cd /opt/mira/app
+export VAULT_ROLE_ID=$(cat /opt/vault/role-id.txt)
+export VAULT_SECRET_ID=$(cat /opt/vault/secret-id.txt)
 
 # Launch MIRA CLI
 /opt/mira/app/venv/bin/python3 /opt/mira/app/talkto_mira.py "$@"
@@ -1586,20 +1575,20 @@ fi
 print_success "MIRA CLI configured"
 
 # Systemd service installation (Linux only, if user opted in)
-if [ "${COMPONENT_CONFIG[install_systemd]}" = "yes" ] && [ "$OS" = "linux" ]; then
-    print_header "Step 17: Systemd Service Configuration"
+if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
+    print_header "Step 16: Systemd Service Configuration"
 
     # Extract Vault credentials from files
     echo -ne "${DIM}${ARROW}${RESET} Reading Vault credentials... "
-    VAULT_ROLE_ID=$(awk '/role_id/ {print $2}' /opt/vault/role-id.txt)
-    VAULT_SECRET_ID=$(awk '/secret_id / {print $2}' /opt/vault/secret-id.txt)
+    VAULT_ROLE_ID=$(cat /opt/vault/role-id.txt)
+    VAULT_SECRET_ID=$(cat /opt/vault/secret-id.txt)
 
     if [ -z "$VAULT_ROLE_ID" ] || [ -z "$VAULT_SECRET_ID" ]; then
         echo -e "${ERROR}"
         print_error "Failed to read Vault credentials from /opt/vault/"
         print_info "Skipping systemd service creation"
-        COMPONENT_CONFIG[install_systemd]="failed"
-        COMPONENT_STATUS[mira_service]="${ERROR} Configuration failed"
+        CONFIG_INSTALL_SYSTEMD="failed"
+        STATUS_MIRA_SERVICE="${ERROR} Configuration failed"
     else
         echo -e "${CHECKMARK}"
 
@@ -1645,7 +1634,7 @@ EOF
         print_info "Service will auto-start on system boot"
 
         # Start service if user chose to during configuration
-        if [ "${COMPONENT_CONFIG[start_mira_now]}" = "yes" ]; then
+        if [ "${CONFIG_START_MIRA_NOW}" = "yes" ]; then
             echo ""
             start_service mira.service systemctl
 
@@ -1656,25 +1645,25 @@ EOF
             if sudo systemctl is-active --quiet mira.service; then
                 print_success "MIRA service is running"
                 print_info "View logs: journalctl -u mira -f"
-                COMPONENT_STATUS[mira_service]="${CHECKMARK} Running"
+                STATUS_MIRA_SERVICE="${CHECKMARK} Running"
             else
                 print_warning "MIRA service may have failed to start"
                 print_info "Check status: systemctl status mira"
                 print_info "View logs: journalctl -u mira -n 50"
-                COMPONENT_STATUS[mira_service]="${ERROR} Start failed"
+                STATUS_MIRA_SERVICE="${ERROR} Start failed"
             fi
         else
             print_info "To start later: sudo systemctl start mira"
             print_info "To view logs: journalctl -u mira -f"
-            COMPONENT_STATUS[mira_service]="${DIM}Not started${RESET}"
+            STATUS_MIRA_SERVICE="${DIM}Not started${RESET}"
         fi
     fi
-elif [ "${COMPONENT_CONFIG[install_systemd]}" = "no" ]; then
-    print_header "Step 17: Systemd Service Configuration"
+elif [ "${CONFIG_INSTALL_SYSTEMD}" = "no" ]; then
+    print_header "Step 16: Systemd Service Configuration"
     print_info "Skipping systemd service installation (user opted out)"
 fi
 
-print_header "Step 18: Cleanup"
+print_header "Step 17: Cleanup"
 
 if [ "$LOUD_MODE" = true ]; then
     print_step "Flushing pip cache..."
@@ -1748,10 +1737,10 @@ fi
 
 echo ""
 echo -e "${BOLD}${BLUE}API Key Configuration${RESET}"
-echo -e "  Anthropic: ${COMPONENT_STATUS[anthropic]}"
-echo -e "  Groq:      ${COMPONENT_STATUS[groq]}"
+echo -e "  Anthropic: ${STATUS_ANTHROPIC}"
+echo -e "  Groq:      ${STATUS_GROQ}"
 
-if [ "${COMPONENT_CONFIG[anthropic_key]}" = "PLACEHOLDER_SET_THIS_LATER" ] || [ "${COMPONENT_CONFIG[groq_key]}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
+if [ "${CONFIG_ANTHROPIC_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ] || [ "${CONFIG_GROQ_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
     echo ""
     print_warning "Required API keys not configured!"
     print_info "MIRA will not work until you set both API keys."
@@ -1769,8 +1758,8 @@ if [ "$OS" = "linux" ]; then
     print_info "Valkey: localhost:6379"
     print_info "Vault: http://localhost:8200 (systemd service)"
     print_info "PostgreSQL: localhost:5432 (systemd service)"
-    if [ "${COMPONENT_CONFIG[install_systemd]}" = "yes" ]; then
-        print_info "MIRA: http://localhost:1993 (systemd service - ${COMPONENT_STATUS[mira_service]})"
+    if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ]; then
+        print_info "MIRA: http://localhost:1993 (systemd service - ${STATUS_MIRA_SERVICE})"
     fi
 elif [ "$OS" = "macos" ]; then
     print_info "Valkey: localhost:6379 (brew services)"
@@ -1780,13 +1769,13 @@ fi
 
 echo ""
 echo -e "${BOLD}${GREEN}Next Steps${RESET}"
-if [ "${COMPONENT_CONFIG[install_systemd]}" = "yes" ] && [ "$OS" = "linux" ]; then
-    if [[ "${COMPONENT_STATUS[mira_service]}" == *"Running"* ]]; then
+if [ "${CONFIG_INSTALL_SYSTEMD}" = "yes" ] && [ "$OS" = "linux" ]; then
+    if [[ "${STATUS_MIRA_SERVICE}" == *"Running"* ]]; then
         echo -e "  ${CYAN}→${RESET} MIRA is running at: ${BOLD}http://localhost:1993${RESET}"
         echo -e "  ${CYAN}→${RESET} Check status: ${BOLD}systemctl status mira${RESET}"
         echo -e "  ${CYAN}→${RESET} View logs: ${BOLD}journalctl -u mira -f${RESET}"
         echo -e "  ${CYAN}→${RESET} Stop MIRA: ${BOLD}sudo systemctl stop mira${RESET}"
-    elif [[ "${COMPONENT_STATUS[mira_service]}" == *"failed"* ]]; then
+    elif [[ "${STATUS_MIRA_SERVICE}" == *"failed"* ]]; then
         echo -e "  ${CYAN}→${RESET} Check logs: ${BOLD}journalctl -u mira -n 50${RESET}"
         echo -e "  ${CYAN}→${RESET} Check status: ${BOLD}systemctl status mira${RESET}"
         echo -e "  ${CYAN}→${RESET} Try starting: ${BOLD}sudo systemctl start mira${RESET}"
@@ -1822,14 +1811,14 @@ echo -e "${BOLD}${CYAN}Launch MIRA CLI Now?${RESET}"
 print_info "MIRA CLI will auto-start the API server and open an interactive chat."
 echo ""
 read -p "$(echo -e ${CYAN}Start MIRA CLI now?${RESET}) (yes/no): " LAUNCH_MIRA
-if [ "$LAUNCH_MIRA" = "yes" ]; then
+if [[ "$LAUNCH_MIRA" =~ ^[Yy](es)?$ ]]; then
     echo ""
     print_success "Launching MIRA CLI..."
     echo ""
     # Set up Vault environment and launch
     export VAULT_ADDR='http://127.0.0.1:8200'
-    export VAULT_ROLE_ID=$(awk '/role_id/ {print $2}' /opt/vault/role-id.txt)
-    export VAULT_SECRET_ID=$(awk '/secret_id / {print $2}' /opt/vault/secret-id.txt)
+    export VAULT_ROLE_ID=$(cat /opt/vault/role-id.txt)
+    export VAULT_SECRET_ID=$(cat /opt/vault/secret-id.txt)
     cd /opt/mira/app
     exec venv/bin/python3 talkto_mira.py
 fi

@@ -68,7 +68,7 @@ class ToolLoaderTrinket(EventAwareTrinket):
         Handle update requests from InvokeOtherTool or other sources.
 
         Processes actions: initialize, tool_loaded, tool_unloaded,
-        tool_used, fallback_mode
+        tool_used, fallback_mode, cleanup_completed
         """
         # Process specific tool loader actions
         context = event.context
@@ -84,6 +84,8 @@ class ToolLoaderTrinket(EventAwareTrinket):
             self._handle_tool_used(context)
         elif action == 'fallback_mode':
             self._handle_fallback_mode(context)
+        elif action == 'cleanup_completed':
+            self._handle_cleanup_completed(context)
 
         # Call parent to handle standard trinket update flow
         # This will call generate_content and publish the result
@@ -143,6 +145,10 @@ class ToolLoaderTrinket(EventAwareTrinket):
                     is_fallback=True  # Mark for cleanup after 1 turn
                 )
         logger.info(f"Fallback mode: loaded {len(loaded_tools)} tools")
+
+    def _handle_cleanup_completed(self, context: Dict[str, Any]) -> None:
+        """Handle cleanup completion notification - triggers content refresh."""
+        logger.debug("Cleanup completed, refreshing tool hints")
 
     def _handle_turn_completed(self, event) -> None:
         """

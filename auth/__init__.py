@@ -1,6 +1,4 @@
-"""
-Single-user authentication module.
-"""
+"""Single-user authentication module."""
 
 from auth.api import get_current_user
 

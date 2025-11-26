@@ -551,24 +551,6 @@ class UserDomainHandler(BaseDomainHandler):
                 "calendar_url": str
             }
         },
-        "store_email_config": {
-            "required": ["email_address", "password", "imap_server", "smtp_server"],
-            "optional": ["imap_port", "smtp_port", "use_ssl"],
-            "types": {
-                "email_address": str,
-                "password": str,
-                "imap_server": str,
-                "smtp_server": str,
-                "imap_port": int,
-                "smtp_port": int,
-                "use_ssl": bool
-            }
-        },
-        "get_email_config": {
-            "required": [],
-            "optional": [],
-            "types": {}
-        },
         "store_calendar_config": {
             "required": ["calendar_url"],
             "optional": [],
@@ -635,75 +617,7 @@ class UserDomainHandler(BaseDomainHandler):
                 "preferences": updated_prefs,
                 "message": "Preferences updated successfully (placeholder implementation)"
             }
-        
-        elif action == "store_email_config":
-            from utils.user_credentials import store_email_config_for_current_user
-            
-            # Build config dict with defaults
-            config = {
-                "email_address": data["email_address"],
-                "password": data["password"],
-                "imap_server": data["imap_server"],
-                "smtp_server": data["smtp_server"],
-                "imap_port": data.get("imap_port", 993),
-                "smtp_port": data.get("smtp_port", 465),
-                "use_ssl": data.get("use_ssl", True)
-            }
-            
-            try:
-                from tools.implementations.email_tool import EmailTool
-                
-                # Validate required fields first
-                if not config["imap_server"] or not config["email_address"] or not config["password"]:
-                    raise ValidationError("Missing required email configuration. Please provide server, email address, and password.")
-                
-                # Create temporary tool instance for validation
-                email_tool = EmailTool()
-                email_tool.imap_server = config["imap_server"]
-                email_tool.imap_port = config["imap_port"]
-                email_tool.smtp_server = config["smtp_server"] 
-                email_tool.smtp_port = config["smtp_port"]
-                email_tool.email_address = config["email_address"]
-                email_tool.use_ssl = config["use_ssl"]
-                email_tool._password = config["password"]
-                email_tool._config_loaded = True
-                
-                # Test IMAP connection
-                if not email_tool._connect():
-                    raise ValidationError("Cannot connect to IMAP server. Please check your server settings and credentials.")
-                
-                # Clean up test connection
-                email_tool._disconnect()
-                
-                # If validation passes, store the configuration
-                store_email_config_for_current_user(config)
-                return {
-                    "success": True,
-                    "message": "Email configuration validated and stored successfully"
-                }
-            except ValidationError:
-                raise
-            except Exception as e:
-                raise ValidationError(f"Email validation failed: {str(e)}")
-        
-        elif action == "get_email_config":
-            from utils.user_credentials import get_email_config_for_current_user
 
-            config = get_email_config_for_current_user()
-            if config:
-                # Remove password from response for security
-                safe_config = {k: v for k, v in config.items() if k != "password"}
-                return {
-                    "success": True,
-                    "config": safe_config
-                }
-            else:
-                return {
-                    "success": True,
-                    "config": None,
-                    "message": "No email configuration found"
-                }
-        
         elif action == "store_calendar_config":
             from utils.user_credentials import UserCredentialService
 
@@ -853,6 +767,12 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
 class ContinuumDomainHandler(BaseDomainHandler):
     """Handler for continuum-level configuration actions."""
 
+    # Valid model identifiers that users can select
+    VALID_MODELS = [
+        "claude-opus-4-5-20251101",
+        "claude-haiku-4-5-20251001",
+    ]
+
     ACTIONS = {
         "set_thinking_budget_preference": {
             "required": [],
@@ -862,6 +782,18 @@ class ContinuumDomainHandler(BaseDomainHandler):
             }
         },
         "get_thinking_budget_preference": {
+            "required": [],
+            "optional": [],
+            "types": {}
+        },
+        "set_model_preference": {
+            "required": [],
+            "optional": ["model"],
+            "types": {
+                "model": (str, type(None))
+            }
+        },
+        "get_model_preference": {
             "required": [],
             "optional": [],
             "types": {}
@@ -914,6 +846,49 @@ class ContinuumDomainHandler(BaseDomainHandler):
                 "success": True,
                 "continuum_id": str(continuum.id),
                 "budget": budget
+            }
+
+        elif action == "set_model_preference":
+            from cns.infrastructure.continuum_pool import get_continuum_pool
+
+            model = data.get("model")
+
+            # Validate model if provided
+            if model is not None:
+                if not isinstance(model, str):
+                    raise ValidationError("Model must be a string or null")
+                if model not in self.VALID_MODELS:
+                    raise ValidationError(
+                        f"Model must be one of {self.VALID_MODELS} or null. Got: {model}"
+                    )
+
+            pool = get_continuum_pool()
+            continuum = pool.get_or_create()
+
+            # Set the preference in Valkey
+            pool.set_model_preference(model)
+
+            return {
+                "success": True,
+                "continuum_id": str(continuum.id),
+                "model": model,
+                "message": f"Model preference set to {model}"
+            }
+
+        elif action == "get_model_preference":
+            from cns.infrastructure.continuum_pool import get_continuum_pool
+
+            pool = get_continuum_pool()
+            continuum = pool.get_or_create()
+
+            # Get the preference from Valkey
+            model = pool.get_model_preference()
+
+            return {
+                "success": True,
+                "continuum_id": str(continuum.id),
+                "model": model,
+                "available_models": self.VALID_MODELS
             }
 
         else:
