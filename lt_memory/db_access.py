@@ -993,6 +993,41 @@ class LTMemoryDB:
 
             return [Entity(**row) for row in results]
 
+    def get_active_entities(
+        self,
+        limit: int = 100,
+        user_id: Optional[str] = None
+    ) -> List['Entity']:
+        """
+        Fetch active (non-archived) entities for a user, ordered by importance.
+
+        Used for fuzzy entity matching fallback in retrieval priming.
+        Returns top entities by link_count since exact matching handles
+        most cases via targeted DB query.
+
+        Args:
+            limit: Maximum entities to return (default 100 - top entities only)
+            user_id: User ID (uses ambient context if None)
+
+        Returns:
+            List of Entity models ordered by link_count (most referenced first)
+        """
+        from lt_memory.models import Entity
+
+        resolved_user_id = self._resolve_user_id(user_id)
+
+        with self.session_manager.get_session(resolved_user_id) as session:
+            query = """
+            SELECT * FROM entities
+            WHERE is_archived = FALSE
+            ORDER BY link_count DESC
+            LIMIT %(limit)s
+            """
+
+            results = session.execute_query(query, {'limit': limit})
+
+            return [Entity(**row) for row in results]
+
     def link_memory_to_entity(
         self,
         memory_id: UUID,

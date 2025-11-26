@@ -12,10 +12,11 @@
 -- 4. Access rate: effective_access_count / MAX(7, activity_days_since_creation)
 -- 5. Value score: LN(1 + access_rate / 0.02) * 0.8
 -- 6. Hub score: f(inbound_links) with diminishing returns after 10 links
--- 7. Raw score: value_score + hub_score
--- 8. Recency boost: 1.0 / (1.0 + activity_days_since_last_access * 0.03)
--- 9. Temporal multiplier: happens_at proximity boost (calendar-based)
--- 10. Sigmoid transform: 1.0 / (1.0 + EXP(-(raw_score * recency * temporal - 2.0)))
+-- 7. Entity hub score: f(entity_links × entity.link_count × type_weight) with diminishing returns
+-- 8. Raw score: value_score + hub_score + entity_hub_score
+-- 9. Recency boost: 1.0 / (1.0 + activity_days_since_last_access * 0.03)
+-- 10. Temporal multiplier: happens_at proximity boost (calendar-based)
+-- 11. Sigmoid transform: 1.0 / (1.0 + EXP(-(raw_score * recency * temporal - 2.0)))
 --
 -- CONSTANTS:
 -- - BASELINE_ACCESS_RATE = 0.02 (1 access per 50 activity days)
@@ -23,6 +24,8 @@
 -- - MIN_AGE_DAYS = 7 (prevents spikes for new memories)
 -- - SIGMOID_CENTER = 2.0 (maps average memories to ~0.5 importance)
 -- - EXPIRATION_TRAILOFF_DAYS = 5 (grace period after expires_at)
+-- - ENTITY_LINEAR_THRESHOLD = 50 (weighted entity links before diminishing returns)
+-- - ENTITY_TYPE_WEIGHTS: PERSON=1.0, EVENT=0.9, ORG=0.8, PRODUCT=0.7, etc.
 --
 -- ACTIVITY DAYS vs CALENDAR DAYS:
 -- - Decay calculations use ACTIVITY DAYS (user engagement days) to prevent
@@ -66,6 +69,44 @@ ROUND(CAST(
                             ELSE
                                 0.4 + (jsonb_array_length(COALESCE(m.inbound_links, '[]'::jsonb)) - 10) * 0.02
                                     / (1 + (jsonb_array_length(COALESCE(m.inbound_links, '[]'::jsonb)) - 10) * 0.05)
+                        END
+                    ) +
+
+                    -- ENTITY HUB SCORE: entity link value with type weighting and diminishing returns
+                    -- Memories linked to important/frequently-referenced entities score higher
+                    (
+                        CASE
+                            WHEN jsonb_array_length(COALESCE(m.entity_links, '[]'::jsonb)) = 0 THEN 0.0
+                            ELSE
+                                -- Calculate weighted entity links via subquery
+                                COALESCE((
+                                    SELECT
+                                        CASE
+                                            WHEN SUM(entity_weight) <= 0 THEN 0.0
+                                            -- Linear scaling up to 50 weighted links
+                                            WHEN SUM(entity_weight) <= 50 THEN SUM(entity_weight) * 0.005
+                                            -- Diminishing returns above 50
+                                            ELSE 0.25 + LN(SUM(entity_weight) / 50) * 0.075
+                                        END
+                                    FROM (
+                                        SELECT
+                                            e.link_count * CASE e.entity_type
+                                                WHEN 'PERSON' THEN 1.0
+                                                WHEN 'EVENT' THEN 0.9
+                                                WHEN 'ORG' THEN 0.8
+                                                WHEN 'PRODUCT' THEN 0.7
+                                                WHEN 'WORK_OF_ART' THEN 0.6
+                                                WHEN 'GPE' THEN 0.5
+                                                WHEN 'NORP' THEN 0.5
+                                                WHEN 'LAW' THEN 0.5
+                                                WHEN 'FAC' THEN 0.4
+                                                WHEN 'LANGUAGE' THEN 0.3
+                                                ELSE 0.5
+                                            END as entity_weight
+                                        FROM jsonb_array_elements(m.entity_links) AS el
+                                        JOIN entities e ON (el->>'uuid')::uuid = e.id
+                                    ) entity_weights
+                                ), 0.0)
                         END
                     )
                 ) *

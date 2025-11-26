@@ -3,10 +3,23 @@ Hybrid search implementation combining BM25 text search with vector similarity.
 
 This module provides hybrid retrieval that leverages both lexical matching
 (for exact phrases) and semantic similarity (for related concepts).
+
+Also provides query-time entity priming: when entities are mentioned in the query,
+memories linked to those entities receive a relevance boost.
 """
 import logging
 from typing import List, Tuple, Dict, Any, Optional
+from uuid import UUID
 from collections import defaultdict
+
+from rapidfuzz import fuzz
+
+from lt_memory.entity_weights import (
+    ENTITY_TYPE_WEIGHTS,
+    ENTITY_BOOST_COEFFICIENT,
+    MAX_ENTITY_BOOST,
+    FUZZY_MATCH_THRESHOLD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,16 +30,39 @@ class HybridSearcher:
 
     Uses Reciprocal Rank Fusion (RRF) to combine results from both methods,
     with intent-aware weighting to optimize for different query types.
+
+    Also provides query-time entity priming: when entities are mentioned in
+    the query, memories linked to those entities receive a relevance boost.
     """
 
-    def __init__(self, db_access):
+    def __init__(self, db_access, entity_extractor=None):
         """
         Initialize hybrid searcher.
 
         Args:
             db_access: LTMemoryDB instance for database operations
+            entity_extractor: Optional EntityExtractor instance for NER priming.
+                              If not provided, will be lazily initialized on first use.
         """
         self.db = db_access
+        self._entity_extractor = entity_extractor
+        self._entity_extractor_initialized = entity_extractor is not None
+        self._cached_user_entities = None  # Cache for entity matching within session
+
+    @property
+    def entity_extractor(self):
+        """Lazy initialization of EntityExtractor for NER priming."""
+        if not self._entity_extractor_initialized:
+            try:
+                from lt_memory.entity_extraction import EntityExtractor
+                self._entity_extractor = EntityExtractor()
+                self._entity_extractor_initialized = True
+                logger.info("HybridSearcher: Lazily initialized EntityExtractor for NER priming")
+            except Exception as e:
+                logger.warning(f"Failed to initialize EntityExtractor: {e}. Entity priming disabled.")
+                self._entity_extractor = None
+                self._entity_extractor_initialized = True
+        return self._entity_extractor
 
     def hybrid_search(
         self,
@@ -84,9 +120,17 @@ class HybridSearcher:
             limit
         )
 
+        # Apply entity priming boost if entity extractor is available
+        entity_boost_count = 0
+        if self.entity_extractor and query_text:
+            fused_results, entity_boost_count = self._apply_entity_priming(
+                query_text, fused_results
+            )
+
         logger.info(
             f"Hybrid search: {len(bm25_results)} BM25 + {len(vector_results)} vector "
-            f"-> {len(fused_results)} fused results (intent: {search_intent})"
+            f"-> {len(fused_results)} fused results (intent: {search_intent}, "
+            f"entity_boosts: {entity_boost_count})"
         )
 
         return fused_results
@@ -195,5 +239,224 @@ class HybridSearcher:
         # Sort by combined RRF score
         sorted_ids = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
 
-        # Return top memories
-        return [memory_map[memory_id] for memory_id, _ in sorted_ids[:limit]]
+        # Return top memories with RRF scores preserved for potential boosting
+        results = []
+        for memory_id, rrf_score in sorted_ids[:limit]:
+            memory = memory_map[memory_id]
+            # Store RRF score in similarity_score for entity boosting
+            memory.similarity_score = rrf_score
+            results.append(memory)
+        return results
+
+    def _apply_entity_priming(
+        self,
+        query_text: str,
+        memories: List[Any]
+    ) -> Tuple[List[Any], int]:
+        """
+        Apply entity-based relevance boost to search results.
+
+        When entities mentioned in the query match the user's known entities,
+        memories linked to those entities receive a multiplicative boost.
+
+        Args:
+            query_text: User's search query
+            memories: List of Memory objects from RRF fusion
+
+        Returns:
+            Tuple of (boosted memories sorted by score, count of boosted memories)
+        """
+        if not memories:
+            return memories, 0
+
+        # Extract entities from query
+        query_entities = self.entity_extractor.extract_entities_with_types(query_text)
+        if not query_entities:
+            return memories, 0
+
+        # Match query entities to user's known entities
+        matched_entities = self._match_entities_to_user(query_entities)
+        if not matched_entities:
+            return memories, 0
+
+        # Apply boost to memories containing matched entities
+        boosted_count = 0
+        for memory in memories:
+            entity_boost = self._calculate_entity_boost(memory, matched_entities)
+            if entity_boost > 0:
+                boost_factor = 1.0 + min(entity_boost, MAX_ENTITY_BOOST)
+                if memory.similarity_score is not None:
+                    memory.similarity_score *= boost_factor
+                boosted_count += 1
+
+        # Re-sort by boosted scores
+        memories.sort(key=lambda m: m.similarity_score or 0, reverse=True)
+
+        logger.debug(
+            f"Entity priming: matched {len(matched_entities)} entities, "
+            f"boosted {boosted_count} memories"
+        )
+
+        return memories, boosted_count
+
+    def _match_entities_to_user(
+        self,
+        query_entities: List[Tuple[str, str]]
+    ) -> Dict[UUID, Tuple[float, str]]:
+        """
+        Match extracted query entities to user's known entities.
+
+        Uses targeted DB lookup for exact matches first, then limited fuzzy
+        matching only for unmatched entities. Avoids fetching all user entities.
+
+        Args:
+            query_entities: List of (entity_name, entity_type) from query
+
+        Returns:
+            Dict mapping entity_id -> (match_confidence, entity_type)
+        """
+        if not query_entities:
+            return {}
+
+        matched = {}
+        unmatched_queries = []
+
+        # Step 1: Try exact match via targeted DB query
+        exact_matches = self._find_exact_entity_matches(query_entities)
+        for entity in exact_matches:
+            matched[entity.id] = (1.0, entity.entity_type)
+
+        # Track which query entities didn't get exact matches
+        matched_names = {e.name.lower() for e in exact_matches}
+        for query_name, query_type in query_entities:
+            if query_name.lower() not in matched_names:
+                unmatched_queries.append((query_name, query_type))
+
+        # Step 2: For unmatched entities, try fuzzy matching against top entities
+        if unmatched_queries:
+            fuzzy_matches = self._find_fuzzy_entity_matches(unmatched_queries, matched)
+            matched.update(fuzzy_matches)
+
+        return matched
+
+    def _find_exact_entity_matches(
+        self,
+        query_entities: List[Tuple[str, str]]
+    ) -> List[Any]:
+        """
+        Find exact entity matches via targeted DB query.
+
+        Args:
+            query_entities: List of (entity_name, entity_type) from query
+
+        Returns:
+            List of matched Entity objects
+        """
+        if not query_entities:
+            return []
+
+        # Build query for exact matches on name (case-insensitive)
+        entity_names = [name.lower() for name, _ in query_entities]
+
+        resolved_user_id = self.db._resolve_user_id()
+
+        with self.db.session_manager.get_session(resolved_user_id) as session:
+            query = """
+            SELECT * FROM entities
+            WHERE LOWER(name) = ANY(%(names)s)
+              AND is_archived = FALSE
+            ORDER BY link_count DESC
+            """
+            results = session.execute_query(query, {'names': entity_names})
+
+            from lt_memory.models import Entity
+            return [Entity(**row) for row in results]
+
+    def _find_fuzzy_entity_matches(
+        self,
+        unmatched_queries: List[Tuple[str, str]],
+        already_matched: Dict[UUID, Tuple[float, str]]
+    ) -> Dict[UUID, Tuple[float, str]]:
+        """
+        Find fuzzy entity matches for queries that didn't get exact matches.
+
+        Only fetches top entities by link_count to limit the search space.
+
+        Args:
+            unmatched_queries: List of (entity_name, entity_type) that need fuzzy matching
+            already_matched: Already matched entity IDs to skip
+
+        Returns:
+            Dict mapping entity_id -> (match_confidence, entity_type)
+        """
+        # Fetch limited set of top entities for fuzzy matching
+        # Use cached entities if available, otherwise fetch top 100
+        if self._cached_user_entities is None:
+            self._cached_user_entities = self.db.get_active_entities(limit=100)
+
+        if not self._cached_user_entities:
+            return {}
+
+        matched = {}
+
+        for query_name, query_type in unmatched_queries:
+            query_name_lower = query_name.lower()
+            best_match = None
+            best_score = 0.0
+
+            for entity in self._cached_user_entities:
+                if entity.id in already_matched or entity.id in matched:
+                    continue
+
+                # Fuzzy match on name
+                score = fuzz.ratio(query_name_lower, entity.name.lower()) / 100.0
+
+                # Bonus for matching type
+                if entity.entity_type == query_type:
+                    score = min(1.0, score + 0.1)
+
+                if score >= FUZZY_MATCH_THRESHOLD and score > best_score:
+                    best_match = entity
+                    best_score = score
+
+            if best_match:
+                matched[best_match.id] = (best_score, best_match.entity_type)
+
+        return matched
+
+    def _calculate_entity_boost(
+        self,
+        memory: Any,
+        matched_entities: Dict[UUID, Tuple[float, str]]
+    ) -> float:
+        """
+        Calculate entity boost for a memory based on matched entities.
+
+        Args:
+            memory: Memory object with entity_links
+            matched_entities: Dict of entity_id -> (confidence, type)
+
+        Returns:
+            Total boost factor (before capping)
+        """
+        if not memory.entity_links:
+            return 0.0
+
+        total_boost = 0.0
+
+        for entity_link in memory.entity_links:
+            try:
+                entity_id = UUID(entity_link.get('uuid', ''))
+            except (ValueError, TypeError):
+                continue
+
+            if entity_id in matched_entities:
+                confidence, entity_type = matched_entities[entity_id]
+                type_weight = ENTITY_TYPE_WEIGHTS.get(entity_type, 0.5)
+                total_boost += confidence * type_weight * ENTITY_BOOST_COEFFICIENT
+
+        return total_boost
+
+    def clear_entity_cache(self):
+        """Clear cached user entities. Call when switching user context."""
+        self._cached_user_entities = None
