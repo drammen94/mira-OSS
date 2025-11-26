@@ -36,11 +36,11 @@ class ApiConfig(BaseModel):
     # Prompt caching (Anthropic-specific)
     enable_prompt_caching: bool = Field(default=True, description="Enable prompt caching for system prompts and tools (reduces costs by ~90% on cached content)")
 
-    # Emergency fallback settings
+    # Emergency fallback settings (defaults to local Ollama - no API key required)
     emergency_fallback_enabled: bool = Field(default=True, description="Enable automatic failover to emergency provider on Anthropic errors")
-    emergency_fallback_endpoint: str = Field(default="https://api.openai.com/v1/chat/completions", description="OpenAI-compatible endpoint for emergency fallback")
-    emergency_fallback_api_key_name: str = Field(default="openai_key", description="Vault key name for emergency fallback API key")
-    emergency_fallback_model: str = Field(default="gpt-5-mini", description="Model to use during emergency fallback")
+    emergency_fallback_endpoint: str = Field(default="http://localhost:11434/v1/chat/completions", description="OpenAI-compatible endpoint for emergency fallback (default: local Ollama)")
+    emergency_fallback_api_key_name: Optional[str] = Field(default=None, description="Vault key name for emergency fallback API key (None for local providers like Ollama)")
+    emergency_fallback_model: str = Field(default="qwen3:1.7b", description="Model to use during emergency fallback")
     emergency_fallback_recovery_minutes: int = Field(default=5, description="Minutes to wait before testing Anthropic recovery")
 
     # Pre-processing analysis settings (subconscious reasoning layer)

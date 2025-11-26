@@ -252,17 +252,21 @@ class LLMProvider:
         self.emergency_fallback_api_key = None
 
         if self.emergency_fallback_enabled:
-            try:
-                from clients.vault_client import get_api_key
-                self.emergency_fallback_api_key = get_api_key(config.api.emergency_fallback_api_key_name)
-                if not self.emergency_fallback_api_key:
-                    self.logger.warning(f"Emergency fallback API key not found - fallback disabled")
-                    self.emergency_fallback_enabled = False
-                else:
-                    self.logger.info("Emergency fallback enabled")
-            except Exception as e:
-                self.logger.error(f"Failed to get emergency fallback API key: {e}")
-                self.emergency_fallback_enabled = False
+            # API key is optional for local providers like Ollama
+            if config.api.emergency_fallback_api_key_name:
+                try:
+                    from clients.vault_client import get_api_key
+                    self.emergency_fallback_api_key = get_api_key(config.api.emergency_fallback_api_key_name)
+                    if not self.emergency_fallback_api_key:
+                        self.logger.warning(f"Emergency fallback API key '{config.api.emergency_fallback_api_key_name}' not found in Vault")
+                except Exception as e:
+                    self.logger.warning(f"Failed to get emergency fallback API key: {e}")
+
+            # Log fallback configuration
+            if self.emergency_fallback_api_key:
+                self.logger.info(f"Emergency fallback enabled with API key")
+            else:
+                self.logger.info(f"Emergency fallback enabled (no API key - local provider: {config.api.emergency_fallback_endpoint})")
 
         # Optional tool repository for tool execution
         self.tool_repo = tool_repo
@@ -623,20 +627,22 @@ class LLMProvider:
         """Non-streaming generation with Anthropic SDK or generic provider - returns Message object."""
         try:
             # Check failover FIRST - route to emergency fallback if active
-            if self._is_failover_active() and self.emergency_fallback_api_key:
+            if self._is_failover_active():
                 self.logger.warning("Using emergency fallback (failover active)")
                 endpoint_url = config.api.emergency_fallback_endpoint
                 model_override = config.api.emergency_fallback_model
                 api_key_override = self.emergency_fallback_api_key
+                # Disable thinking for fallback providers (not supported)
+                kwargs['thinking_enabled'] = False
                 # Fall through to generic provider routing below
 
             # Route to generic provider if endpoint_url is provided
             if endpoint_url:
-                # Require complete OpenAI request parameters
-                if not model_override or not api_key_override:
+                # Require model_override; api_key_override is optional for local providers like Ollama
+                if not model_override:
                     raise ValueError(
-                        "When using endpoint_url, both model_override and api_key_override must be provided. "
-                        "Generic provider calls require explicit, complete parameters."
+                        "When using endpoint_url, model_override must be provided. "
+                        "Generic provider calls require an explicit model identifier."
                     )
 
                 self.logger.info(f"Routing to generic OpenAI-compatible endpoint: {endpoint_url} / {model_override}")
@@ -646,8 +652,8 @@ class LLMProvider:
 
                 generic_client = GenericOpenAIClient(
                     endpoint=endpoint_url,
-                    api_key=api_key_override,
                     model=model_override,
+                    api_key=api_key_override,  # Optional for local providers like Ollama
                     timeout=self.timeout,
                     max_tokens=self.max_tokens,
                     temperature=self.temperature
@@ -777,9 +783,11 @@ class LLMProvider:
                 pass
         except anthropic.APIError as e:
             # ACTIVATE FAILOVER on Anthropic errors
-            if self.emergency_fallback_enabled and self.emergency_fallback_api_key:
+            if self.emergency_fallback_enabled:
                 self.logger.error(f"Anthropic error: {e} - activating emergency failover")
                 self._activate_failover()
+                # Disable thinking for fallback providers (not supported)
+                kwargs['thinking_enabled'] = False
                 return self._generate_non_streaming(
                     messages, tools,
                     endpoint_url=config.api.emergency_fallback_endpoint,
@@ -800,8 +808,10 @@ class LLMProvider:
     ) -> Generator[StreamEvent, None, None]:
         """Execute streaming request with Anthropic SDK."""
         # Check failover FIRST - use non-streaming fallback if active
-        if self._is_failover_active() and self.emergency_fallback_api_key:
+        if self._is_failover_active():
             self.logger.warning("Using emergency fallback (failover active, non-streaming)")
+            # Disable thinking for fallback providers (not supported)
+            kwargs['thinking_enabled'] = False
             response = self._generate_non_streaming(
                 messages, tools,
                 endpoint_url=config.api.emergency_fallback_endpoint,
@@ -958,9 +968,11 @@ class LLMProvider:
             yield from self._handle_anthropic_error(e)
         except anthropic.APIError as e:
             # ACTIVATE FAILOVER on Anthropic errors
-            if self.emergency_fallback_enabled and self.emergency_fallback_api_key:
+            if self.emergency_fallback_enabled:
                 self.logger.error(f"Anthropic error: {e} - activating emergency failover")
                 self._activate_failover()
+                # Disable thinking for fallback providers (not supported)
+                kwargs['thinking_enabled'] = False
                 response = self._generate_non_streaming(
                     messages, tools,
                     endpoint_url=config.api.emergency_fallback_endpoint,

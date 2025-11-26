@@ -114,8 +114,8 @@ class GenericOpenAIClient:
     def __init__(
         self,
         endpoint: str,
-        api_key: str,
         model: str,
+        api_key: Optional[str] = None,
         timeout: int = 60,
         max_tokens: int = 4096,
         temperature: float = 1.0
@@ -125,8 +125,8 @@ class GenericOpenAIClient:
 
         Args:
             endpoint: Full URL to chat completions endpoint
-            api_key: API key for authentication
             model: Model identifier to use
+            api_key: API key for authentication (optional for local providers like Ollama)
             timeout: Request timeout in seconds
             max_tokens: Default max tokens (can be overridden per request)
             temperature: Default temperature (can be overridden per request)
@@ -203,12 +203,12 @@ class GenericOpenAIClient:
         # Make HTTP request
         try:
             logger.debug(f"Generic OpenAI client request to {self.endpoint} with model {self.model}")
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
             response = requests.post(
                 self.endpoint,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                },
+                headers=headers,
                 json=payload,
                 timeout=self.timeout
             )
