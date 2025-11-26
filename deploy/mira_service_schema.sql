@@ -35,6 +35,7 @@
 
 -- Database owner role (schema management, migrations, backups)
 -- NOT a superuser - can only manage mira_service database
+-- BYPASSRLS required for admin operations that need to bypass Row Level Security
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mira_admin') THEN
@@ -44,6 +45,7 @@ BEGIN
             NOCREATEROLE
             NOREPLICATION
             NOSUPERUSER
+            BYPASSRLS
             PASSWORD 'changethisifdeployingpwd';
     END IF;
 END
