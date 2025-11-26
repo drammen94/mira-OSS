@@ -1,21 +1,10 @@
 #!/usr/bin/env python3
 """
-MIRA CLI Chat - Simple command-line interface for chatting with MIRA.
-
-Interactive mode automatically starts the MIRA API server in the background if
-not already running, then presents a chat interface. The server is cleanly
-shutdown when the chat session ends.
-
-One-shot mode (--headless) requires the server to already be running and outputs
-only the response for clean stdout usage in scripts.
+MIRA Chat - Rich-based CLI for chatting with MIRA.
 
 Usage:
-    python talkto_mira.py                     # Interactive chat (auto-starts server)
-    python talkto_mira.py --headless "Question" # One-shot query (requires running server)
-
-Prerequisites:
-    - API token stored in Vault at mira/api_keys/mira_api
-    - VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID environment variables set
+    python talkto_mira.py              # Interactive chat
+    python talkto_mira.py --headless "message"  # One-shot query
 """
 
 import argparse
@@ -25,519 +14,414 @@ import re
 import signal
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
-# Add project root to Python path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-# Import readline for input editing support (arrow keys, history)
-try:
-    import readline  # noqa: F401 - imported for side effects
-except ImportError:
-    # readline not available on Windows, fallback to basic input
-    pass
-
 import requests
+from rich.console import Console
+from rich.panel import Panel
+from rich.align import Align
+from rich.text import Text
 
 from clients.vault_client import get_api_key
 
-# Configuration
 MIRA_API_URL = os.getenv("MIRA_API_URL", "http://localhost:1993")
-REQUEST_TIMEOUT = 120  # seconds
-SERVER_STARTUP_TIMEOUT = 30  # seconds to wait for server to start
+REQUEST_TIMEOUT = 120
+SERVER_STARTUP_TIMEOUT = 30
 
-# Global server process tracker
 _server_process = None
-
-# ANSI color codes for labels
-# Wrapped in \001 and \002 to tell readline these are non-printing characters (for input prompts)
-CYAN_PROMPT = "\001\033[36m\002"
-GREEN_PROMPT = "\001\033[32m\002"
-RESET_PROMPT = "\001\033[0m\002"
-
-# Plain ANSI codes for print statements
-CYAN = "\033[36m"
-GREEN = "\033[32m"
-RED = "\033[31m"
-BOLD = "\033[1m"
-RESET = "\033[0m"
+console = Console()
 
 
-class LoadingIndicator:
-    """Scanning loading animation for clean mode."""
-
-    def __init__(self, centered: bool = False):
-        self.stop_event = threading.Event()
-        self.thread = None
-        self.centered = centered
-
-    def _animate(self):
-        """Animation loop that scans through LOADING text."""
-        base = "LOADING"
-        frames = []
-
-        # Create frame with all letters visible
-        full_frame_parts = ["-"]
-        for letter in base:
-            full_frame_parts.extend([letter, "-"])
-        frames.append("".join(full_frame_parts))
-
-        # Create frames where each letter gets hidden in sequence
-        for hide_idx in range(len(base)):
-            frame_parts = ["-"]
-            for i, letter in enumerate(base):
-                if i == hide_idx:
-                    frame_parts.append("--")  # Creates --- with previous dash
-                else:
-                    frame_parts.extend([letter, "-"])
-            frames.append("".join(frame_parts))
-
-        idx = 0
-        while not self.stop_event.is_set():
-            frame = frames[idx]
-            if self.centered:
-                # Center the frame
-                centered_frame = center_text(frame)
-                print(f"\r{centered_frame}", end="", flush=True)
-            else:
-                print(f"\r{frame}", end="", flush=True)
-            idx = (idx + 1) % len(frames)
-            time.sleep(0.15)
-
-    def start(self):
-        """Start the animation."""
-        self.stop_event.clear()
-        self.thread = threading.Thread(target=self._animate, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        """Stop the animation and clear the line."""
-        self.stop_event.set()
-        if self.thread:
-            self.thread.join(timeout=1)
-        if self.centered:
-            width, _ = get_terminal_size()
-            print("\r" + " " * width, end="")  # Clear the entire line
-        else:
-            print("\r" + " " * 20, end="")  # Clear the line
-        print("\r", end="")
-
+# ─────────────────────────────────────────────────────────────────────────────
+# API
+# ─────────────────────────────────────────────────────────────────────────────
 
 def strip_emotion_tag(text: str) -> str:
-    """Remove MIRA's emotion tag and preceding newline if present."""
-    # Pattern matches optional newline + emotion tag
     pattern = r'\n?<mira:my_emotion>.*?</mira:my_emotion>'
     return re.sub(pattern, '', text, flags=re.DOTALL).strip()
 
 
 def send_message(token: str, message: str) -> dict:
-    """Send message to MIRA API and return response."""
     url = f"{MIRA_API_URL}/v0/api/chat"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     try:
-        response = requests.post(
-            url,
-            headers=headers,
-            json={"message": message},
-            timeout=REQUEST_TIMEOUT
-        )
+        response = requests.post(url, headers=headers, json={"message": message}, timeout=REQUEST_TIMEOUT)
         return response.json()
     except requests.exceptions.Timeout:
-        return {
-            "success": False,
-            "error": {"message": "Request timed out after 120 seconds"}
-        }
+        return {"success": False, "error": {"message": "Request timed out"}}
     except requests.exceptions.ConnectionError:
-        return {
-            "success": False,
-            "error": {"message": f"Cannot connect to MIRA server at {MIRA_API_URL}"}
-        }
+        return {"success": False, "error": {"message": f"Cannot connect to {MIRA_API_URL}"}}
     except Exception as e:
-        return {
-            "success": False,
-            "error": {"message": f"Unexpected error: {str(e)}"}
-        }
+        return {"success": False, "error": {"message": str(e)}}
 
 
-def clear_screen():
-    """Clear the terminal screen."""
-    os.system('clear' if os.name != 'nt' else 'cls')
-
-
-def get_terminal_size() -> tuple[int, int]:
-    """Get terminal dimensions.
-
-    Returns:
-        tuple[int, int]: (width, height) of terminal
-    """
+def call_action(token: str, domain: str, action: str, data: dict = None) -> dict:
+    url = f"{MIRA_API_URL}/v0/api/actions"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     try:
-        size = os.get_terminal_size()
-        return size.columns, size.lines
-    except OSError:
-        return 80, 24  # Fallback dimensions
+        response = requests.post(url, headers=headers, json={"domain": domain, "action": action, "data": data or {}}, timeout=10)
+        return response.json()
+    except Exception as e:
+        return {"success": False, "error": {"message": str(e)}}
 
 
-def center_text(text: str, width: int = None) -> str:
-    """Center text horizontally in terminal.
+# ─────────────────────────────────────────────────────────────────────────────
+# Preferences
+# ─────────────────────────────────────────────────────────────────────────────
 
-    Args:
-        text: Text to center
-        width: Terminal width (auto-detect if None)
-
-    Returns:
-        str: Centered text with padding
-    """
-    if width is None:
-        width, _ = get_terminal_size()
-
-    text_width = len(text)
-    if text_width >= width:
-        return text
-
-    padding = (width - text_width) // 2
-    return " " * padding + text
+THINKING_LEVELS = {"off": 0, "low": 1024, "medium": 4096, "high": 32000, "default": None}
+THINKING_LABELS = {0: "off", 1024: "low", 4096: "medium", 32000: "high", None: "default"}
+MODEL_ALIASES = {"opus": "claude-opus-4-5-20251101", "haiku": "claude-haiku-4-5-20251001", "default": None}
+MODEL_LABELS = {"claude-opus-4-5-20251101": "opus", "claude-haiku-4-5-20251001": "haiku", None: "default"}
 
 
-def print_centered(text: str, color: str = "") -> None:
-    """Print text centered in terminal.
-
-    Args:
-        text: Text to print
-        color: Optional ANSI color code
-    """
-    centered = center_text(text)
-    if color:
-        print(f"{color}{centered}{RESET}")
-    else:
-        print(centered)
+def get_preferences(token: str) -> tuple[str, str]:
+    model_resp = call_action(token, "continuum", "get_model_preference")
+    think_resp = call_action(token, "continuum", "get_thinking_budget_preference")
+    model = model_resp.get("model") if model_resp.get("success") else None
+    budget = think_resp.get("budget") if think_resp.get("success") else None
+    return MODEL_LABELS.get(model, model or "default"), THINKING_LABELS.get(budget, str(budget) if budget else "default")
 
 
-def move_cursor_to_center(text_lines: int = 1) -> None:
-    """Move cursor to vertical center of screen.
-
-    Args:
-        text_lines: Number of text lines to account for
-    """
-    _, height = get_terminal_size()
-    vertical_padding = (height - text_lines) // 2
-    print("\n" * vertical_padding, end="")
+def set_model_preference(token: str, model_alias: str) -> bool:
+    if model_alias not in MODEL_ALIASES:
+        return False
+    resp = call_action(token, "continuum", "set_model_preference", {"model": MODEL_ALIASES[model_alias]})
+    return resp.get("success", False)
 
 
-def show_boot_screen() -> None:
-    """Display MIRA boot screen for 2 seconds.
-
-    Skips boot screen if terminal width is less than 80 characters.
-    """
-    width, _ = get_terminal_size()
-
-    # Skip boot screen if terminal is too narrow for ASCII art
-    if width < 80:
-        clear_screen()
-        return
-
-    clear_screen()
-
-    # ASCII art
-    logo = [
-        "                                               @@@@@@@@@@@                      ",
-        "@@@@@@@        @@        @@@@@@         @      @@@@@@@@@@@    @@@@@@      @@@@@@",
-        "@@ @  @        @@        @@@@@@        @ @     @@@@@@@@@@@    @    @      @@@@@@",
-        "@@ @  @        @@        @   @        @ @@@    @@@@@@@@@@@    @@@@@@      @@@@@@",
-        "                                               @@@@@@@@@@@                       "
-    ]
-
-    # Center vertically
-    move_cursor_to_center(len(logo))
-
-    # Print each line centered horizontally
-    for line in logo:
-        print_centered(line, CYAN)
-
-    time.sleep(2)
-    clear_screen()
+def set_thinking_preference(token: str, level: str) -> bool:
+    if level not in THINKING_LEVELS:
+        return False
+    resp = call_action(token, "continuum", "set_thinking_budget_preference", {"budget": THINKING_LEVELS[level]})
+    return resp.get("success", False)
 
 
-def get_separator() -> str:
-    """Get a separator line that spans the terminal width.
-
-    Returns:
-        str: Separator with newlines above and below
-    """
-    width, _ = get_terminal_size()
-    return f"\n{'=' * width}\n"
-
+# ─────────────────────────────────────────────────────────────────────────────
+# Server
+# ─────────────────────────────────────────────────────────────────────────────
 
 def is_api_running() -> bool:
-    """Check if the MIRA API is already running.
-
-    Returns:
-        bool: True if API is reachable and healthy, False otherwise
-    """
     try:
         response = requests.get(f"{MIRA_API_URL}/v0/api/health", timeout=2)
-        # Check for 200 OK or 503 (unhealthy but running)
         return response.status_code in [200, 503]
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+    except:
         return False
 
 
 def start_api_server() -> subprocess.Popen:
-    """Start the MIRA API server as a background process.
-
-    Returns:
-        subprocess.Popen: The server process
-
-    Raises:
-        RuntimeError: If server fails to start
-    """
     global _server_process
-
-    # Use the project root's main.py
     main_py = project_root / "main.py"
-
     if not main_py.exists():
         raise RuntimeError(f"Cannot find main.py at {main_py}")
-
-    # Start the server process with output suppressed
-    _server_process = subprocess.Popen(
-        [sys.executable, str(main_py)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        cwd=str(project_root)
-    )
-
+    _server_process = subprocess.Popen([sys.executable, str(main_py)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=str(project_root))
     return _server_process
 
 
 def wait_for_api_ready(timeout: int = SERVER_STARTUP_TIMEOUT) -> bool:
-    """Wait for the API server to be ready.
-
-    Args:
-        timeout: Maximum seconds to wait
-
-    Returns:
-        bool: True if server became ready, False if timeout
-    """
     start_time = time.time()
-
     while time.time() - start_time < timeout:
         if is_api_running():
             return True
         time.sleep(0.5)
-
     return False
 
 
 def shutdown_server():
-    """Shutdown the API server if it was started by this script."""
     global _server_process
-
     if _server_process is not None:
         try:
             _server_process.terminate()
+            _server_process.wait(timeout=5)
+        except:
             try:
-                _server_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
                 _server_process.kill()
-                _server_process.wait()
-        except Exception:
-            pass  # Already terminated
-        finally:
-            _server_process = None
+            except:
+                pass
+        _server_process = None
 
 
-def one_shot(token: str, message: str) -> None:
-    """Send a single message and print the response.
+# ─────────────────────────────────────────────────────────────────────────────
+# Splashscreen
+# ─────────────────────────────────────────────────────────────────────────────
 
-    Args:
-        token: API authentication token
-        message: Message to send to MIRA
-    """
-    result = send_message(token, message)
+LOGO = [
+    "                                               @@@@@@@@@@@                      ",
+    "@@@@@@@        @@        @@@@@@         @      @@@@@@@@@@@    @@@@@@      @@@@@@",
+    "@@ @  @        @@        @@@@@@        @ @     @@@@@@@@@@@    @    @      @@@@@@",
+    "@@ @  @        @@        @   @        @ @@@    @@@@@@@@@@@    @@@@@@      @@@@@@",
+    "                                                @@@@@@@@@@@"
+]
 
-    if result.get("success"):
-        mira_response = result.get("data", {}).get("response", "")
-        clean_response = strip_emotion_tag(mira_response)
-        print(clean_response)
-    else:
-        error = result.get("error", {})
-        error_message = error.get("message", "Unknown error")
-        print(f"Error: {error_message}", file=sys.stderr)
-        sys.exit(1)
 
+def show_splashscreen() -> None:
+    """Display MIRA splashscreen. Skips if terminal too narrow."""
+    if console.width < 80:
+        return
+
+    console.clear()
+
+    # Center vertically
+    vertical_padding = (console.height - len(LOGO)) // 2
+    console.print("\n" * vertical_padding, end="")
+
+    # Print logo centered in lime green
+    for line in LOGO:
+        padding = (console.width - len(line)) // 2
+        console.print(" " * padding + line, style="bright_green")
+
+    time.sleep(2)
+    console.clear()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rendering
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_user_message(text: str) -> None:
+    """Render a user message - cyan border, right-aligned."""
+    width = min(len(text) + 4, int(console.width * 0.6))
+    panel = Panel(text, border_style="cyan", width=max(width, 20), padding=(0, 1))
+    console.print(Align.right(panel))
+
+
+def render_mira_message(text: str, is_error: bool = False) -> None:
+    """Render a MIRA message - magenta border, left-aligned."""
+    width = min(len(max(text.split('\n'), key=len)) + 4, int(console.width * 0.7))
+    style = "red" if is_error else "magenta"
+    panel = Panel(text, border_style=style, width=max(width, 20), padding=(0, 1))
+    console.print(panel)
+
+
+def render_status_bar(model: str, thinking: str) -> None:
+    """Render the status bar. Hides default values."""
+    # Build left side - only show non-default values
+    parts = []
+    if model != "default":
+        parts.append(model)
+    if thinking != "default":
+        parts.append(thinking)
+
+    left_text = " • ".join(parts) if parts else ""
+    left = Text(f" {left_text}" if left_text else "", style="cyan")
+    right = Text("/help • ctrl+c quit", style="dim")
+
+    padding = console.width - len(left.plain) - len(right.plain)
+    console.print(Text.assemble(left, " " * max(padding, 1), right))
+    console.print("─" * console.width, style="dim")
+
+
+def render_screen(
+    history: list[tuple[str, str]],
+    model: str,
+    thinking: str,
+    pending_user_msg: str = None,
+    show_thinking: bool = False
+) -> None:
+    """Clear and render the full screen with status bar always at bottom."""
+    console.clear()
+
+    # Calculate content height
+    content_lines = len(history) * 8 + 2
+    if pending_user_msg:
+        content_lines += 4
+    if show_thinking:
+        content_lines += 4
+    terminal_height = console.height
+
+    # Push content to bottom if not enough to fill screen
+    if content_lines < terminal_height - 2:
+        blank_lines = terminal_height - content_lines - 2
+        console.print("\n" * blank_lines, end="")
+
+    # Render history
+    for user_msg, mira_msg in history:
+        render_user_message(user_msg)
+        console.print()
+        render_mira_message(mira_msg)
+        console.print()
+
+    # Render pending message (not yet in history)
+    if pending_user_msg:
+        render_user_message(pending_user_msg)
+        console.print()
+
+    # Render thinking indicator
+    if show_thinking:
+        render_thinking()
+        console.print()
+
+    # Status bar always last
+    render_status_bar(model, thinking)
+
+
+def render_thinking() -> None:
+    """Show thinking indicator."""
+    panel = Panel("thinking...", border_style="dim", width=20, padding=(0, 1))
+    console.print(panel)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chat Loop
+# ─────────────────────────────────────────────────────────────────────────────
 
 def chat_loop(token: str) -> None:
-    """Run interactive chat loop in clean mode.
+    history: list[tuple[str, str]] = []
+    model_pref, thinking_pref = get_preferences(token)
 
-    Args:
-        token: API authentication token
-    """
-    # Track previous exchange
-    prev_user_message = None
-    prev_mira_response = None
+    render_screen(history, model_pref, thinking_pref)
 
     while True:
         try:
-            # Get user input
-            user_message = input(f"{GREEN_PROMPT}User:{RESET_PROMPT} ").strip()
-
-            # Check for exit commands
-            if user_message.lower() in ['quit', 'exit', 'bye']:
-                print("\nGoodbye!")
-                break
-
-            # Skip empty messages
-            if not user_message:
-                continue
-
-            # Show previous exchange with waiting indicator
-            clear_screen()
-            if prev_user_message and prev_mira_response:
-                # Show previous exchange
-                print(f"{GREEN}User:{RESET} {prev_user_message}")
-                print(get_separator(), end="")
-                print(f"{CYAN}MIRA:{RESET} {prev_mira_response}\n")
-            # Show current message being processed
-            print(f"{GREEN}User:{RESET} [message sent...]")
-
-            # Send message with loading animation
-            indicator = LoadingIndicator()
-            indicator.start()
-            result = send_message(token, user_message)
-            indicator.stop()
-
-            # Handle response
-            if result.get("success"):
-                mira_response = result.get("data", {}).get("response", "")
-                clean_response = strip_emotion_tag(mira_response)
-
-                # Clear and show current exchange
-                clear_screen()
-                print(f"{GREEN}User:{RESET} {user_message}")
-                print(get_separator(), end="")
-                print(f"{CYAN}MIRA:{RESET} {clean_response}\n")
-
-                # Store this exchange for next iteration
-                prev_user_message = user_message
-                prev_mira_response = clean_response
-            else:
-                error = result.get("error", {})
-                error_message = error.get("message", "Unknown error")
-
-                # Handle specific error cases
-                if "401" in str(error) or "Authentication" in error_message:
-                    print(f"\n✗ {error_message}")
-                    print("Your token may be invalid or expired.")
-                    break
-                elif "429" in str(error):
-                    print(f"\n✗ Rate limit exceeded. Please wait before sending more messages.")
-                else:
-                    print(f"\n✗ Error: {error_message}")
-
-        except KeyboardInterrupt:
-            print("\n\nGoodbye!")
+            user_input = console.input("[cyan]>[/cyan] ").strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Goodbye![/dim]")
             break
-        except Exception as e:
-            print(f"\n✗ Unexpected error: {e}")
+
+        if not user_input:
+            continue
+
+        if user_input.lower() in ('quit', 'exit', 'bye'):
+            console.print("[dim]Goodbye![/dim]")
+            break
+
+        # Slash commands
+        if user_input.startswith('/'):
+            parts = user_input[1:].split(maxsplit=1)
+            cmd = parts[0].lower() if parts else ""
+            arg = parts[1].lower() if len(parts) > 1 else None
+
+            if cmd == "help":
+                console.print()
+                render_mira_message("/model [opus|haiku|default]\n/think [off|low|medium|high|default]\n/status\n/clear\nquit, exit, bye")
+                console.print()
+
+            elif cmd == "status":
+                model_pref, thinking_pref = get_preferences(token)
+                console.print()
+                render_mira_message(f"Model: {model_pref}\nThinking: {thinking_pref}")
+                console.print()
+
+            elif cmd == "model":
+                if arg and arg in MODEL_ALIASES:
+                    if set_model_preference(token, arg):
+                        model_pref = arg  # Trust what we set, don't re-fetch
+                        console.print()
+                        render_mira_message(f"Model → {model_pref}")
+                        console.print()
+                    else:
+                        console.print()
+                        render_mira_message("Failed to set model", is_error=True)
+                        console.print()
+                elif arg:
+                    console.print()
+                    render_mira_message("Options: opus, haiku, default", is_error=True)
+                    console.print()
+                else:
+                    console.print()
+                    render_mira_message(f"Current: {model_pref}\nOptions: opus, haiku, default")
+                    console.print()
+
+            elif cmd == "think":
+                if arg and arg in THINKING_LEVELS:
+                    if set_thinking_preference(token, arg):
+                        thinking_pref = arg  # Trust what we set, don't re-fetch
+                        console.print()
+                        render_mira_message(f"Thinking → {thinking_pref}")
+                        console.print()
+                    else:
+                        console.print()
+                        render_mira_message("Failed to set thinking", is_error=True)
+                        console.print()
+                elif arg:
+                    console.print()
+                    render_mira_message("Options: off, low, medium, high, default", is_error=True)
+                    console.print()
+                else:
+                    console.print()
+                    render_mira_message(f"Current: {thinking_pref}\nOptions: off, low, medium, high, default")
+                    console.print()
+
+            elif cmd == "clear":
+                history.clear()
+                render_screen(history, model_pref, thinking_pref)
+
+            else:
+                console.print()
+                render_mira_message(f"Unknown: /{cmd}", is_error=True)
+                console.print()
+
+            continue
+
+        # Regular message - show thinking state
+        render_screen(history, model_pref, thinking_pref, pending_user_msg=user_input, show_thinking=True)
+
+        result = send_message(token, user_input)
+
+        if result.get("success"):
+            response = strip_emotion_tag(result.get("data", {}).get("response", ""))
+            history.append((user_input, response))
+        else:
+            error = result.get("error", {}).get("message", "Unknown error")
+            history.append((user_input, f"Error: {error}"))
+
+        render_screen(history, model_pref, thinking_pref)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Entry
+# ─────────────────────────────────────────────────────────────────────────────
+
+def one_shot(token: str, message: str) -> None:
+    result = send_message(token, message)
+    if result.get("success"):
+        print(strip_emotion_tag(result.get("data", {}).get("response", "")))
+    else:
+        print(f"Error: {result.get('error', {}).get('message', 'Unknown')}", file=sys.stderr)
+        sys.exit(1)
 
 
 def main():
-    """Main entry point."""
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(
-        description="MIRA CLI Chat Interface",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python talkto_mira.py                     # Interactive chat (auto-starts server)
-  python talkto_mira.py --headless "Hello"    # One-shot query (requires running server)
-        """
-    )
-    parser.add_argument(
-        '--headless',
-        type=str,
-        help="Send a single message and exit (server must already be running)"
-    )
+    parser = argparse.ArgumentParser(description="MIRA Chat")
+    parser.add_argument('--headless', type=str, help="One-shot message")
     args = parser.parse_args()
 
-    # Auto-start server only for interactive mode
-    server_started = False
+    # Show splashscreen for interactive mode
     if not args.headless:
-        # Interactive mode - show boot screen
-        show_boot_screen()
+        show_splashscreen()
 
-        # Start server if needed
-        if not is_api_running():
-            # Center the startup message
-            move_cursor_to_center(2)  # Account for message + loading indicator
-            print_centered("Starting MIRA API server...", CYAN)
-
-            try:
-                start_api_server()
-                server_started = True
-
-                # Show centered loading indicator while waiting for server
-                indicator = LoadingIndicator(centered=True)
-                indicator.start()
-
-                if not wait_for_api_ready():
-                    indicator.stop()
-                    clear_screen()
-                    move_cursor_to_center(1)
-                    print_centered(f"✗ Server failed to start within {SERVER_STARTUP_TIMEOUT} seconds", "")
-                    shutdown_server()
-                    sys.exit(1)
-
-                indicator.stop()
-                clear_screen()
-                move_cursor_to_center(1)
-                print_centered(f"✓ MIRA API server ready", GREEN)
-                time.sleep(1)
-                clear_screen()
-
-            except Exception as e:
-                if 'indicator' in locals():
-                    indicator.stop()
-                clear_screen()
-                move_cursor_to_center(1)
-                print_centered(f"✗ Failed to start API server: {e}", "")
-                shutdown_server()
-                sys.exit(1)
-
-            # Register cleanup handler if we started the server
-            atexit.register(shutdown_server)
-            signal.signal(signal.SIGINT, lambda sig, frame: (shutdown_server(), sys.exit(0)))
-            signal.signal(signal.SIGTERM, lambda sig, frame: (shutdown_server(), sys.exit(0)))
-        else:
-            # Server already running - just clear screen for chat
-            clear_screen()
+    server_started = False
+    if not args.headless and not is_api_running():
+        console.print("[bright_green]Starting MIRA API server...[/bright_green]")
+        start_api_server()
+        server_started = True
+        if not wait_for_api_ready():
+            console.print("[red]Server failed to start[/red]", style="bold")
+            shutdown_server()
+            sys.exit(1)
+        console.print("[bright_green]Server ready.[/bright_green]")
+        time.sleep(0.5)
+        atexit.register(shutdown_server)
+        signal.signal(signal.SIGINT, lambda s, f: (shutdown_server(), sys.exit(0)))
+        signal.signal(signal.SIGTERM, lambda s, f: (shutdown_server(), sys.exit(0)))
 
     try:
-        # Get token from Vault
         token = get_api_key('mira_api')
     except Exception as e:
-        print(f"✗ Failed to retrieve API token from Vault: {e}", file=sys.stderr)
-        print("\nMake sure:", file=sys.stderr)
-        print("  1. Vault environment variables are set (VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID)", file=sys.stderr)
-        print("  2. API token is stored in Vault at: mira/api_keys/mira_api", file=sys.stderr)
+        console.print(f"[red]Failed to get API token: {e}[/red]")
         if server_started:
             shutdown_server()
         sys.exit(1)
 
-    # Route to appropriate mode
     if args.headless:
         one_shot(token, args.headless)
     else:
         chat_loop(token)
 
-    # Clean shutdown if we started the server
     if server_started:
         shutdown_server()
 
