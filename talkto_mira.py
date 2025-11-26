@@ -18,6 +18,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -315,10 +316,62 @@ def render_screen(
     render_status_bar(model, thinking)
 
 
+class ThinkingAnimation:
+    """Animated bouncing face while waiting for response."""
+
+    FACE = "^_^"
+    WIDTH = 12  # Inner width for bouncing
+
+    def __init__(self):
+        self.running = False
+        self.thread = None
+        self.position = 0
+        self.direction = 1
+
+    def start(self):
+        """Start the animation in a background thread."""
+        self.running = True
+        self.position = 0
+        self.direction = 1
+        self.thread = threading.Thread(target=self._animate, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        """Stop the animation."""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=0.2)
+        # Clear the animation line
+        print(f"\033[1A\033[2K", end="", flush=True)
+
+    def _animate(self):
+        """Animation loop - bounces face back and forth."""
+        max_pos = self.WIDTH - len(self.FACE)
+        while self.running:
+            # Build the frame
+            left_pad = " " * self.position
+            right_pad = " " * (max_pos - self.position)
+            frame = f"[ {left_pad}{self.FACE}{right_pad} ]"
+
+            # Print in place (move up, clear line, print)
+            print(f"\r{frame}", end="", flush=True)
+
+            # Update position
+            self.position += self.direction
+            if self.position >= max_pos:
+                self.direction = -1
+            elif self.position <= 0:
+                self.direction = 1
+
+            time.sleep(0.1)
+
+
+_thinking_animation = ThinkingAnimation()
+
+
 def render_thinking() -> None:
-    """Show thinking indicator."""
-    panel = Panel("thinking...", border_style="dim", width=20, padding=(0, 1))
-    console.print(panel)
+    """Show thinking indicator (static fallback)."""
+    print("[ ^_^        ]", flush=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -420,10 +473,12 @@ def chat_loop(token: str) -> None:
 
             continue
 
-        # Regular message - show thinking state
+        # Regular message - show thinking animation
         render_screen(history, model_pref, thinking_pref, pending_user_msg=user_input, show_thinking=True)
+        _thinking_animation.start()
 
         result = send_message(token, user_input)
+        _thinking_animation.stop()
 
         if result.get("success"):
             response = strip_emotion_tag(result.get("data", {}).get("response", ""))
