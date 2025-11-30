@@ -4,6 +4,14 @@ LLM Provider with Anthropic SDK and streaming events.
 Provides a generator-based streaming API using native Anthropic SDK
 with prompt caching, tool use, and type-safe message handling.
 
+# TODO: Add generic provider failover (same pattern as Anthropic failover)
+# When generic provider (Groq) returns 401/403 PermissionError:
+# 1. Add _generic_failover_active class flag (like _failover_active)
+# 2. In _generate_non_streaming, check flag before calling generic client
+# 3. Catch PermissionError, activate flag, retry with emergency_fallback_endpoint
+# 4. Add recovery timer to test if Groq is back
+# This enables automatic Ollama fallback when Groq credentials are invalid/placeholder
+
 ⚠️ IMPORTANT FOR CODE GENERATORS (CLAUDE):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ALWAYS use LLMProvider.generate_response() for ALL LLM calls in application code.

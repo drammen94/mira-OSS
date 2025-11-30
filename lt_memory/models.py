@@ -18,7 +18,7 @@ class Memory(BaseModel):
     id: UUID
     user_id: UUID
     text: str
-    embedding: Optional[List[float]] = None  # AllMiniLM (384)
+    embedding: Optional[List[float]] = None  # mdbr-leaf-ir-asym (768d)
     importance_score: float = Field(ge=0.0, le=1.0)
     created_at: datetime
     updated_at: Optional[datetime] = None

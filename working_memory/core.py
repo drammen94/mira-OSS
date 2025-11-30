@@ -184,12 +184,27 @@ class WorkingMemory:
     def get_active_trinkets(self) -> List[str]:
         """
         Get list of registered trinket names.
-        
+
         Returns:
             List of trinket class names
         """
         return list(self._trinkets.keys())
-        
+
+    def get_trinket(self, name: str) -> Optional[object]:
+        """
+        Get a registered trinket by name.
+
+        Used when components need direct access to trinket state (e.g., orchestrator
+        accessing ProactiveMemoryTrinket's cached memories for retention evaluation).
+
+        Args:
+            name: Trinket class name (e.g., 'ProactiveMemoryTrinket')
+
+        Returns:
+            Trinket instance or None if not found
+        """
+        return self._trinkets.get(name)
+
     ## @CLAUDE I see no mentions of this being invoked in the codebase. Dead code?
     
     def cleanup_all_trinkets(self) -> None:

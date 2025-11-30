@@ -103,6 +103,17 @@ class ExtractionOrchestrator:
                     batch_id = self.execution_strategy.execute_extraction(uid, chunks)
                     if batch_id:
                         results["batches_submitted"] += 1
+
+                        # Mark all collapsed segments as extracted so retry job doesn't re-process
+                        db = self.continuum_repo._get_client(uid)
+                        db.execute_query("""
+                            UPDATE messages
+                            SET metadata = jsonb_set(metadata, '{memories_extracted}', 'true')
+                            WHERE metadata->>'is_segment_boundary' = 'true'
+                              AND metadata->>'status' = 'collapsed'
+                              AND (metadata->>'memories_extracted' = 'false'
+                                   OR metadata->>'memories_extracted' IS NULL)
+                        """, ())
             except Exception as e:
                 logger.error(f"Error in boot extraction for {uid}: {e}", exc_info=True)
                 results["errors"].append(str(e))
@@ -162,26 +173,18 @@ class ExtractionOrchestrator:
         )
 
         # Submit via execution strategy
-        set_current_user_id(user_id)
-        try:
-            batch_id = self.execution_strategy.execute_extraction(user_id, chunks)
+        # Note: Context management is caller's responsibility (handle_timeout sets it)
+        batch_id = self.execution_strategy.execute_extraction(user_id, chunks)
 
-            if batch_id:
-                logger.info(
-                    f"Submitted segment {segment_id} for extraction "
-                    f"(batch: {batch_id}, {len(chunks)} chunks)"
-                )
-                return True
-            else:
-                logger.warning(f"Failed to submit segment {segment_id} for extraction")
-                return False
-        finally:
-            # Only clear if we set it for this user
-            try:
-                if get_current_user_id() == user_id:
-                    clear_user_context()
-            except Exception:
-                pass  # Context wasn't set, nothing to clear
+        if batch_id:
+            logger.info(
+                f"Submitted segment {segment_id} for extraction "
+                f"(batch: {batch_id}, {len(chunks)} chunks)"
+            )
+            return True
+        else:
+            logger.warning(f"Failed to submit segment {segment_id} for extraction")
+            return False
 
     def retry_failed_extractions(self, user_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -232,6 +235,15 @@ class ExtractionOrchestrator:
                     # Retry extraction using existing method
                     if self.submit_segment_extraction(uid, messages, segment_id):
                         results["segments_retried"] += 1
+
+                        # Mark segment as processed via direct SQL update
+                        db = self.continuum_repo._get_client(uid)
+                        db.execute_query("""
+                            UPDATE messages
+                            SET metadata = jsonb_set(metadata, '{memories_extracted}', 'true')
+                            WHERE id = %s
+                        """, (segment['message_id'],))
+
                         logger.info(f"Retried extraction for segment {segment_id}")
 
                 results["users_processed"] += 1
@@ -369,13 +381,12 @@ class ExtractionOrchestrator:
         continuum_id = segment_row[0]['continuum_id']
         segment_time = segment_row[0]['created_at']
 
-        # Load all messages after this segment boundary
+        # Load all messages after this segment boundary (including next boundary to know where to stop)
         messages_query = """
             SELECT * FROM messages
             WHERE continuum_id = %s
                 AND created_at > %s
                 AND (metadata->>'system_notification' IS NULL OR metadata->>'system_notification' = 'false')
-                AND (metadata->>'is_segment_boundary' IS NULL OR metadata->>'is_segment_boundary' = 'false')
             ORDER BY created_at
         """
 

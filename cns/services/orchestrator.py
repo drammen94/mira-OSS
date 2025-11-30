@@ -10,7 +10,6 @@ import logging
 from typing import Dict, Any, List, Optional, Union
 
 from cns.core.continuum import Continuum
-from cns.core.embedded_message import EmbeddedMessage
 from cns.core.events import (
     ContinuumEvent,
     TurnCompletedEvent
@@ -37,7 +36,7 @@ class ContinuumOrchestrator:
         working_memory,
         tool_repo,
         tag_parser,
-        analysis_generator,
+        fingerprint_generator,
         event_bus,
         memory_relevance_service
     ):
@@ -53,8 +52,8 @@ class ContinuumOrchestrator:
             working_memory: Working memory system for prompt composition (required)
             tool_repo: Tool repository for tool definitions (required)
             tag_parser: Tag parser for response parsing (required)
-            analysis_generator: Analysis generator for touchstone generation (required).
-                               Raises RuntimeError on generation failures - no degraded state.
+            fingerprint_generator: Fingerprint generator for retrieval query expansion (required).
+                                  Raises RuntimeError on generation failures - no degraded state.
             event_bus: Event bus for publishing/subscribing to events (required)
             memory_relevance_service: Memory relevance service for surfacing long-term memories (required).
                                      Raises exceptions on infrastructure failures - no degraded state.
@@ -64,7 +63,7 @@ class ContinuumOrchestrator:
         self.working_memory = working_memory
         self.tool_repo = tool_repo
         self.tag_parser = tag_parser
-        self.analysis_generator = analysis_generator
+        self.fingerprint_generator = fingerprint_generator
         self.memory_relevance_service = memory_relevance_service
         self.event_bus = event_bus
 
@@ -123,48 +122,60 @@ class ContinuumOrchestrator:
             text_parts = [item['text'] for item in user_message if item.get('type') == 'text']
             text_for_context = ' '.join(text_parts) if text_parts else 'Image uploaded'
 
-        # Generate analysis (touchstone) before memory retrieval
-        # This is like branch prediction in CPUs - we run a fast model to predict what memories
-        # will be needed BEFORE the expensive main model runs. By pre-computing the semantic
-        # context, we avoid the "one turn behind" problem where memory retrieval would otherwise
-        # be searching based on the previous conversation state rather than the current one.
+        # Get previous memories from trinket for retention evaluation
+        previous_memories = self._get_previous_memories()
+
+        # Generate fingerprint and evaluate retention of previous memories
+        # The fingerprint expands fragmentary queries into retrieval-optimized specifics.
+        # Retention evaluation uses LLM reasoning to decide which previous memories
+        # should stay in context based on conversation trajectory.
         #
-        # generate_analysis() raises RuntimeError on any failure - no degraded state handling
-        touchstone = self.analysis_generator.generate_analysis(continuum, text_for_context)
-
-        # Build weighted context with touchstone
-        weighted_context = self._build_weighted_context(continuum, text_for_context, touchstone)
-        
-        # Generate embeddings once for the weighted context
-        # Always generate 384-dim for real-time operations
-        embedding_384 = self.embeddings_provider.encode_realtime(weighted_context)
-        
-        # Create embedded message for propagation
-        # Use text_for_context as the content for embedding-based operations
-        embedded_msg = EmbeddedMessage(
-            content=text_for_context,
-            weighted_context=weighted_context,
-            user_id=continuum.user_id,
-            embedding_384=embedding_384
+        # generate_fingerprint() raises RuntimeError on failure - no degraded state
+        fingerprint, retained_texts = self.fingerprint_generator.generate_fingerprint(
+            continuum,
+            text_for_context,
+            previous_memories=previous_memories
         )
-        
-        # Search for relevant memories (required service)
-        # Touchstone is guaranteed to exist at this point (or exception was raised)
+
+        # Apply retention to get pinned memories
+        pinned_memories = self._apply_retention(previous_memories, retained_texts)
+
+        # Generate 768d embedding for the fingerprint (query encoding)
+        fingerprint_embedding = self.embeddings_provider.encode_realtime(fingerprint)
+
+        # Fresh retrieval with limit of 20
         # Memory service raises exceptions on infrastructure failures - no hedging
-        surfaced_memories = self.memory_relevance_service.get_relevant_memories(
-            embedded_msg,
-            touchstone=touchstone
+        fresh_memories = self.memory_relevance_service.get_relevant_memories(
+            fingerprint=fingerprint,
+            fingerprint_embedding=fingerprint_embedding,
+            limit=20
         )
 
-        if surfaced_memories:
-            # Send update to ProactiveMemoryTrinket with memories
-            from cns.core.events import UpdateTrinketEvent
-            self.event_bus.publish(UpdateTrinketEvent.create(
-                continuum_id=str(continuum.id),
-                target_trinket="ProactiveMemoryTrinket",
-                context={"memories": surfaced_memories}
-            ))
-            logger.debug(f"Sent {len(surfaced_memories)} memories to ProactiveMemoryTrinket")
+        # Merge pinned + fresh, deduplicating by memory ID
+        # Pinned memories take precedence (appear first)
+        surfaced_memories = self._merge_memories(pinned_memories, fresh_memories)
+
+        # Log retrieval for quality evaluation
+        from cns.services.retrieval_logger import get_retrieval_logger
+        get_retrieval_logger().log_retrieval(
+            continuum_id=continuum.id,
+            raw_query=text_for_context,
+            fingerprint=fingerprint,
+            surfaced_memories=surfaced_memories
+        )
+
+        logger.info(
+            f"Memory surfacing: {len(pinned_memories)} pinned + "
+            f"{len(fresh_memories)} fresh = {len(surfaced_memories)} total"
+        )
+
+        # Send merged memories to ProactiveMemoryTrinket
+        from cns.core.events import UpdateTrinketEvent
+        self.event_bus.publish(UpdateTrinketEvent.create(
+            continuum_id=str(continuum.id),
+            target_trinket="ProactiveMemoryTrinket",
+            context={"memories": surfaced_memories}
+        ))
 
         # Now compose system prompt with all context ready
         from cns.core.events import ComposeSystemPromptEvent
@@ -297,9 +308,6 @@ class ContinuumOrchestrator:
         logger.info(f"Emotion extracted: {parsed_tags.get('emotion')}")
         logger.info(f"Emotion tag in clean_text: {'<mira:my_emotion>' in clean_response_text}")
 
-        # Clean up embedded message to free memory
-        embedded_msg.cleanup()
-        
         # Add final assistant response to continuum FIRST (before topic change handling)
         # Validate response is not blank before saving
         if not clean_response_text or not clean_response_text.strip():
@@ -364,11 +372,8 @@ class ContinuumOrchestrator:
         # Add messages to unit of work for batch persistence
         unit_of_work.add_messages(persist_user_msg, assistant_msg_obj)
 
-        # Always mark metadata for update (touchstone evolves every turn)
+        # Mark metadata for update
         unit_of_work.mark_metadata_updated()
-
-        # Clean up embedded message resources
-        embedded_msg.cleanup()
 
         # Auto-continuation: If tools were loaded and we haven't already tried,
         # automatically continue with the task
@@ -396,51 +401,6 @@ class ContinuumOrchestrator:
 
         return continuum, final_response, metadata
     
-    
-    
-    def _build_weighted_context(
-        self,
-        continuum,
-        current_message: str,
-        touchstone: Optional[str] = None
-    ) -> str:
-        """
-        Build context for embedding using touchstone approach.
-
-        Uses the provided touchstone (from pre-processing analysis) or falls back
-        to extracting from the most recent assistant response.
-
-        Args:
-            continuum: Continuum object with message history
-            current_message: The current user message being processed
-            touchstone: Optional pre-generated touchstone (from AnalysisGenerator)
-
-        Returns:
-            Context string for embedding (touchstone + user message repeated twice)
-        """
-        # Touchstone is required - use it to build rich context
-        context_parts = [touchstone['narrative']]
-
-        if touchstone['temporal_context']:
-            context_parts.append(touchstone['temporal_context'])
-
-        if touchstone['relationship_context']:
-            context_parts.append(touchstone['relationship_context'])
-
-        context_parts.append(f"User says: {current_message}")
-
-        if touchstone['entities']:
-            context_parts.append(f"Topics: {touchstone['entities']}")
-
-        context = " ".join(context_parts)
-
-        # Limit to reasonable length for embedding
-        if len(context) > 3000:
-            context = context[:3000] + "..."
-
-        logger.debug(f"Built touchstone-based context ({len(context)} chars)")
-        return context
-    
     def _handle_system_prompt_composed(self, event):
         """Handle system prompt composed event."""
         from cns.core.events import SystemPromptComposedEvent
@@ -454,6 +414,79 @@ class ContinuumOrchestrator:
         """Publish events to event bus."""
         for event in events:
             self.event_bus.publish(event)
+
+    def _get_previous_memories(self) -> List[Dict[str, Any]]:
+        """
+        Get previously surfaced memories from the trinket cache.
+
+        Returns:
+            List of memory dicts from the previous turn, or empty list if none
+        """
+        trinket = self.working_memory.get_trinket('ProactiveMemoryTrinket')
+        if trinket and hasattr(trinket, 'get_cached_memories'):
+            return trinket.get_cached_memories()
+        return []
+
+    def _apply_retention(
+        self,
+        previous_memories: List[Dict[str, Any]],
+        retained_texts: set
+    ) -> List[Dict[str, Any]]:
+        """
+        Filter previous memories to keep only those marked for retention.
+
+        Matches by memory text since the LLM outputs full text, not IDs.
+
+        Args:
+            previous_memories: All memories from previous turn
+            retained_texts: Set of memory texts marked [x] by the LLM
+
+        Returns:
+            List of memories that should be pinned (retained)
+        """
+        if not previous_memories or not retained_texts:
+            return []
+
+        pinned = []
+        for memory in previous_memories:
+            memory_text = memory.get('text', '')
+            if memory_text and memory_text in retained_texts:
+                pinned.append(memory)
+
+        logger.debug(
+            f"Retention: {len(pinned)}/{len(previous_memories)} memories retained"
+        )
+        return pinned
+
+    def _merge_memories(
+        self,
+        pinned_memories: List[Dict[str, Any]],
+        fresh_memories: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Merge pinned and fresh memories, deduplicating by ID.
+
+        Pinned memories appear first and take precedence.
+
+        Args:
+            pinned_memories: Memories retained from previous turn
+            fresh_memories: Newly retrieved memories
+
+        Returns:
+            Merged list with pinned first, then fresh (no duplicates)
+        """
+        # Start with pinned memories
+        merged = list(pinned_memories)
+        seen_ids = {m.get('id') for m in pinned_memories if m.get('id')}
+
+        # Add fresh memories that aren't already in pinned
+        for memory in fresh_memories:
+            memory_id = memory.get('id')
+            if memory_id and memory_id not in seen_ids:
+                merged.append(memory)
+                seen_ids.add(memory_id)
+
+        return merged
 
 
 # Global orchestrator instance (singleton pattern)

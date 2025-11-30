@@ -13,6 +13,7 @@ using the provided time boundaries for detailed information.
 
 import json
 import logging
+import math
 import re
 from datetime import timedelta
 from typing import Dict, Any, Optional, List, Tuple
@@ -266,6 +267,18 @@ class ContinuumSearchTool(Tool):
         # Get embeddings provider for query embeddings
         self._embeddings_provider = get_hybrid_embeddings_provider()
 
+    def _escape_like_pattern(self, value: str) -> str:
+        """Escape SQL LIKE special characters to prevent wildcard injection."""
+        return value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+    # Parameter sets for each operation to filter kwargs
+    _SEARCH_PARAMS = {
+        'query', 'search_mode', 'entities', 'max_results', 'page',
+        'start_time', 'end_time', 'temporal_direction', 'reference_time'
+    }
+    _SEARCH_WITHIN_SEGMENT_PARAMS = {'segment_id', 'query', 'max_results'}
+    _EXPAND_MESSAGE_PARAMS = {'message_id', 'direction', 'context_count'}
+
     def run(self, operation: str = "search", **kwargs) -> Dict[str, Any]:
         """
         Execute a continuum search operation.
@@ -282,11 +295,15 @@ class ContinuumSearchTool(Tool):
         """
         try:
             if operation == "search":
-                return self._search_messages(**kwargs)
+                # Filter to only accepted parameters to avoid unexpected keyword argument errors
+                filtered = {k: v for k, v in kwargs.items() if k in self._SEARCH_PARAMS}
+                return self._search_messages(**filtered)
             elif operation == "search_within_segment":
-                return self._search_within_segment(**kwargs)
+                filtered = {k: v for k, v in kwargs.items() if k in self._SEARCH_WITHIN_SEGMENT_PARAMS}
+                return self._search_within_segment(**filtered)
             elif operation == "expand_message":
-                return self._expand_message(**kwargs)
+                filtered = {k: v for k, v in kwargs.items() if k in self._EXPAND_MESSAGE_PARAMS}
+                return self._expand_message(**filtered)
             else:
                 raise ValueError(
                     f"Unknown operation: {operation}. "
@@ -582,49 +599,6 @@ class ContinuumSearchTool(Tool):
             }
         }
 
-    def _calculate_confidence(
-        self,
-        results: List[Dict[str, Any]],
-        query: str,
-        entities: List[str]
-    ) -> float:
-        """
-        Calculate confidence score for search results.
-
-        Confidence is based on:
-        - Top result rank score (50%)
-        - Entity match coverage (30%)
-        - Result depth - multiple high-quality results (20%)
-
-        Args:
-            results: Search results with rank scores
-            query: Original query
-            entities: Expected entities
-
-        Returns:
-            Confidence score between 0.0 and 1.0
-        """
-        if not results:
-            return 0.0
-
-        # Top rank quality (50%)
-        top_rank = results[0].get("rank", 0.0)
-        rank_component = top_rank * 0.5
-
-        # Entity coverage (30%)
-        entity_component = 0.0
-        if entities:
-            matched = results[0].get("matched_entities", [])
-            coverage = len(matched) / len(entities)
-            entity_component = coverage * 0.3
-
-        # Result depth (20%)
-        high_quality_count = sum(1 for r in results[:5] if r.get("rank", 0) > 0.5)
-        depth_component = min(high_quality_count / 3, 1.0) * 0.2
-
-        confidence = rank_component + entity_component + depth_component
-        return round(min(confidence, 1.0), 3)
-
     def _format_message_preview(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """
         Format a message as a preview with truncated content.
@@ -823,7 +797,8 @@ class ContinuumSearchTool(Tool):
         # Process results with entity boosting
         results = []
         for row in rows:
-            rank = float(row.get("rank", 0))
+            # Normalize unbounded BM25 score to 0-1 range (matches summary search tanh normalization)
+            rank = math.tanh(float(row.get("rank", 0)))
 
             # Entity boosting
             matched_entities = []
@@ -991,7 +966,7 @@ class ContinuumSearchTool(Tool):
                 "result_count": len(filtered_results),
                 "filtered_from": unfiltered_count,
                 "page": page,
-                "has_more_pages": len(results) > (offset + limit),
+                "has_more_pages": len(results) == (limit + offset),
                 "search_mode": "memories",
                 "meta": {
                     "search_tier": "hybrid_vector_bm25_memories",
@@ -1041,7 +1016,7 @@ class ContinuumSearchTool(Tool):
             LIMIT 1
         """
 
-        rows = db.execute_query(segment_sql, (f"{segment_id}%",))
+        rows = db.execute_query(segment_sql, (f"{self._escape_like_pattern(segment_id)}%",))
 
         if not rows:
             raise ValueError(f"No segment found with ID starting with '{segment_id}'")
@@ -1182,7 +1157,7 @@ class ContinuumSearchTool(Tool):
                 LIMIT 1
             """
 
-            pattern = f"{short_id}%"
+            pattern = f"{self._escape_like_pattern(short_id)}%"
             rows = db.execute_query(query, (pattern,))
 
             if rows:

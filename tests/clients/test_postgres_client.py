@@ -356,7 +356,7 @@ class TestPostgresClientAutomaticTimestamps:
             {
                 "content": "Test memory",
                 "memory_type": "semantic",
-                "embedding": [0.1] * 384  # Mock embedding
+                "embedding": [0.1] * 768  # Mock embedding
             },
             returning="id, created_at, updated_at"
         )

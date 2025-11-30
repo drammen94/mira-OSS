@@ -1,12 +1,12 @@
 """
 Vector operations for LT_Memory system.
 
-Handles embedding generation and storage using AllMiniLM (384d) embeddings.
+Handles embedding generation and storage using mdbr-leaf-ir-asym (768d) embeddings.
 Singleton service that wraps the embeddings provider and database access.
 """
 import logging
 import numpy as np
-from typing import List, Optional, Union, Dict
+from typing import List, Optional, Union
 from uuid import UUID
 
 from lt_memory.models import Memory, ExtractedMemory
@@ -20,7 +20,7 @@ class VectorOps:
     """
     Vector operations service for embedding generation and similarity search.
 
-    Provides embedding operations with AllMiniLM (384d).
+    Uses mdbr-leaf-ir-asym (768d) for document embeddings.
     """
 
     def __init__(self, embeddings_provider, db: LTMemoryDB):
@@ -34,19 +34,12 @@ class VectorOps:
         self.embeddings_provider = embeddings_provider
         self.db = db
 
-        # Check if reranker is available
-        self.reranker_available = (
-            hasattr(embeddings_provider, 'enable_reranker') and
-            embeddings_provider.enable_reranker and
-            hasattr(embeddings_provider, 'rerank')
-        )
-
         # Initialize hybrid searcher
         self.hybrid_searcher = HybridSearcher(db)
 
     def generate_embedding(self, text: str) -> List[float]:
         """
-        Generate AllMiniLM embedding (384d) for text.
+        Generate document embedding (768d) for memory storage.
 
         Args:
             text: Text to embed
@@ -54,7 +47,7 @@ class VectorOps:
         Returns:
             Embedding vector as list of floats
         """
-        embedding = self.embeddings_provider.encode_realtime([text])[0]
+        embedding = self.embeddings_provider.encode_deep([text])[0]
 
         if isinstance(embedding, np.ndarray):
             return embedding.tolist()
@@ -62,7 +55,7 @@ class VectorOps:
 
     def generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         """
-        Generate AllMiniLM embeddings for multiple texts.
+        Generate document embeddings for multiple texts.
 
         Args:
             texts: List of texts to embed
@@ -73,7 +66,7 @@ class VectorOps:
         if not texts:
             return []
 
-        embeddings = self.embeddings_provider.encode_realtime(texts)
+        embeddings = self.embeddings_provider.encode_deep(texts)
 
         result = []
         for embedding in embeddings:
@@ -119,7 +112,7 @@ class VectorOps:
         Internal method that performs vector similarity search.
 
         Args:
-            query_embedding: Embedding vector (384d AllMiniLM)
+            query_embedding: Embedding vector (768d)
             limit: Maximum results to return
             similarity_threshold: Minimum cosine similarity (0-1)
             min_importance: Minimum importance score filter
@@ -144,9 +137,6 @@ class VectorOps:
         """
         Find similar memories using vector similarity search from text query.
 
-        Use this when you have a text query and need to find relevant memories.
-        For example: "Find memories about Python" or user's current message.
-
         Args:
             query: Query text to search for
             limit: Maximum results to return
@@ -155,12 +145,13 @@ class VectorOps:
 
         Returns:
             List of Memory models sorted by similarity
-
-        See also:
-            find_similar_by_embedding: Use when you already have an embedding
-            find_similar_to_memory: Use when expanding from an existing memory
         """
-        query_embedding = self.generate_embedding(query)
+        # Use realtime (query) encoding for search queries
+        embedding = self.embeddings_provider.encode_realtime([query])[0]
+        if isinstance(embedding, np.ndarray):
+            query_embedding = embedding.tolist()
+        else:
+            query_embedding = embedding
 
         return self._search_with_embedding(
             query_embedding=query_embedding,
@@ -172,7 +163,6 @@ class VectorOps:
     def find_similar_by_embedding(
         self,
         query_embedding: Union[List[float], np.ndarray],
-        query_text: Optional[str] = None,
         limit: int = 10,
         similarity_threshold: float = 0.7,
         min_importance: float = 0.1
@@ -180,46 +170,31 @@ class VectorOps:
         """
         Find similar memories using pre-computed embedding.
 
-        Use when embedding already exists (e.g., from CNS EmbeddedMessage)
-        to avoid redundant embedding generation. For new text queries, use
-        find_similar_memories() instead.
-
         Args:
-            query_embedding: Pre-computed embedding vector (384d AllMiniLM)
-            query_text: Optional original text (used for reranking if available)
+            query_embedding: Pre-computed embedding vector (768d)
             limit: Maximum results to return
             similarity_threshold: Minimum cosine similarity (0-1)
             min_importance: Minimum importance score filter
 
         Returns:
             List of Memory models sorted by similarity
-
-        See also:
-            find_similar_memories: Use when starting from text query
-            find_similar_to_memory: Use when expanding from existing memory
         """
         # Convert numpy array to list if needed
         if isinstance(query_embedding, np.ndarray):
             query_embedding = query_embedding.tolist()
 
         # Validate dimensions
-        if len(query_embedding) != 384:
+        if len(query_embedding) != 768:
             raise ValueError(
-                f"Expected 384-dimensional embedding (AllMiniLM), got {len(query_embedding)}"
+                f"Expected 768-dimensional embedding, got {len(query_embedding)}"
             )
 
-        results = self._search_with_embedding(
+        return self._search_with_embedding(
             query_embedding=query_embedding,
             limit=limit,
             similarity_threshold=similarity_threshold,
             min_importance=min_importance
         )
-
-        # Apply reranking if text provided and reranker available
-        if query_text and results and self.reranker_available:
-            results = self.rerank_memories(query_text, results, top_k=limit)
-
-        return results
 
     def find_similar_to_memory(
         self,
@@ -231,10 +206,6 @@ class VectorOps:
         """
         Find memories similar to an existing memory using its embedding.
 
-        Use this when expanding from a known memory - for relationship discovery,
-        cluster formation, or finding related context. More efficient than
-        find_similar_memories since the embedding already exists.
-
         Args:
             memory_id: Reference memory UUID to find neighbors for
             limit: Maximum results to return
@@ -243,9 +214,6 @@ class VectorOps:
 
         Returns:
             List of Memory models sorted by similarity (excludes reference memory)
-
-        See also:
-            find_similar_memories: Use when starting from a text query
         """
         reference_memory = self.db.get_memory(memory_id)
 
@@ -293,47 +261,6 @@ class VectorOps:
         logger.info(f"Updated memory {memory_id} with new text and embedding")
         return updated_memory
 
-    def rerank_memories(
-        self,
-        query: str,
-        memories: List[Memory],
-        top_k: int = 10
-    ) -> List[Memory]:
-        """
-        Rerank memories using reranker model if available.
-
-        Falls back to original order if reranker not available.
-
-        Args:
-            query: Query text
-            memories: List of memories to rerank
-            top_k: Number of top results to return
-
-        Returns:
-            Reranked list of memories
-        """
-        if not self.reranker_available or not memories:
-            return memories[:top_k]
-
-        try:
-            texts = [m.text for m in memories]
-
-            reranked_results = self.embeddings_provider.rerank(
-                query=query,
-                passages=texts,
-                top_k=top_k
-            )
-
-            # Extract indices from (index, score, passage) tuples
-            reranked_memories = [memories[idx] for idx, score, passage in reranked_results]
-
-            logger.debug(f"Reranked {len(memories)} memories to top {top_k}")
-            return reranked_memories
-
-        except Exception as e:
-            logger.warning(f"Reranking failed, returning original order: {e}")
-            return memories[:top_k]
-
     def hybrid_search(
         self,
         query_text: str,
@@ -346,13 +273,10 @@ class VectorOps:
         """
         Perform hybrid BM25 + vector search for optimal memory retrieval.
 
-        Combines exact phrase matching with semantic similarity, weighted
-        based on search intent for different use cases.
-
         Args:
             query_text: Text query for BM25 search
             query_embedding: Pre-computed embedding for vector search
-            search_intent: Intent type from touchstone analysis
+            search_intent: Search strategy (recall/explore/exact/general)
             limit: Maximum results to return
             similarity_threshold: Minimum similarity for vector search
             min_importance: Minimum importance score
@@ -378,6 +302,5 @@ class VectorOps:
         Clean up resources.
 
         No-op: Dependencies managed by factory lifecycle.
-        Nulling references breaks in-flight scheduler jobs.
         """
         logger.debug("VectorOps cleanup completed (no-op)")

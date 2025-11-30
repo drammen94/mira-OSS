@@ -641,14 +641,14 @@ class GetContextTool(Tool):
         return result.get('results', [])
 
     def _search_web(self, query: str) -> List[Dict[str, Any]]:
-        """Use webaccess_tool to search the web."""
+        """Use web_tool to search the web."""
         if not self.tool_repo:
             self.logger.warning("No tool repository available for web search")
             return []
 
-        tool = self.tool_repo.get_tool('webaccess_tool')
+        tool = self.tool_repo.get_tool('web_tool')
         result = tool.run(
-            operation='web_search',
+            operation='search',
             query=query,
             max_results=self.config.web_max_results
         )

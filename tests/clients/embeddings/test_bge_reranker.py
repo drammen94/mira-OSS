@@ -4,7 +4,7 @@ Tests for clients/embeddings/bge_reranker.py
 Tests BGE reranking functionality with real ONNX inference.
 Following MIRA testing philosophy: no mocks, test real model behavior.
 
-Note: This file only tests reranking - embeddings come from AllMiniLM or OpenAI.
+Note: This file only tests reranking - embeddings come from mdbr-leaf-ir-asym.
 """
 import pytest
 import numpy as np

@@ -50,7 +50,7 @@ The sections below provide detailed technical information for those interested i
 
 **Memory that earns its keep**: MIRA doesn't just dump everything into a vector database. Memories are extracted as discrete facts, deduplicated through consolidation, refined into concise statements, and linked through typed relationships (supports, conflicts, supersedes). Memories track their own access patterns. Get used enough, they stick around. Sit idle, they decay and delete.
 
-**Pre-computed semantic intent**: Before your main LLM call, MIRA generates an "evolved semantic touchstone" - a semantic summary of what you're trying to accomplish. This touchstone gets embedded once and used everywhere: memory retrieval, context building, tool selection. Your conversation context gets weighted with this intent signal. This prevents the "one turn behind" problem where memory searches are based on stale context.
+**Retrieval-optimized query expansion**: Before your main LLM call, MIRA generates a "memory fingerprint" - an expanded query optimized for embedding similarity. Fragmentary queries like "yeah, that one" get expanded into concrete specifics (names, places, dates) that match stored memory vocabulary. This fingerprint replaces your original query for retrieval, preventing the "one turn behind" problem where memory searches use stale context.
 
 **Progressive disclosure everywhere**: Tools load on demand through the `invokeother_tool` pattern. You see tool hints (name + brief description), call invokeother to load what you need, then use it. Idle tools auto-unload after 5 turns. This cuts context usage by 80-90%. Search results work the same way - summaries first, then message details on demand.
 
@@ -94,12 +94,12 @@ Long-term memory runs completely in the background. After conversations, it extr
 5. Consolidation engine finds duplicates and superseded memories
 6. Refinement engine distills verbose memories into concise statements
 7. Entity extraction (spaCy) finds people, places, organizations
-8. Memories get embedded (384-dim via AllMiniLM)
+8. Memories get embedded (768-dim via mdbr-leaf-ir-asym)
 9. Storage in PostgreSQL with pgvector indexing
 
 **The surfacing flow**:
 
-1. User asks a question → touchstone generated → embedded
+1. User asks a question → fingerprint generated → embedded
 2. Proactive memory service searches: vector similarity + graph traversal (linked memories) + access score weighting
 3. Top memories ranked by combined score
 4. Memories injected into ProactiveMemoryTrinket
@@ -133,8 +133,8 @@ When you send a message:
 1. **API receives message** → distributed lock acquired per user (prevents race conditions)
 2. **Continuum loaded** → conversation aggregate retrieved from database or created new
 3. **Message added to cache** → not yet persisted, lives in memory
-4. **Touchstone generated** → fast model summarizes semantic intent before main LLM call
-5. **Embedding computed** → single 384-dim vector from weighted context (user message + surrounding messages + touchstone)
+4. **Fingerprint generated** → fast model expands query into retrieval-optimized specifics
+5. **Embedding computed** → single 768-dim vector from fingerprint (retrieval-optimized expansion)
 6. **Memory surfaced** → proactive memory searches using the embedding
 7. **Trinkets updated** → ComposeSystemPromptEvent published, all trinkets contribute content
 8. **System prompt assembled** → working memory collects all trinket contributions
@@ -151,7 +151,7 @@ A `Continuum` is an immutable value object representing a complete conversation:
 - **user_id**: Owner (enforced by Row-Level Security)
 - **_message_cache**: Recent messages in memory (hot cache)
 - **_cumulative_tokens**: Running token count for cache management
-- **metadata**: Stores touchstone, embedding, topic, segment info
+- **metadata**: Stores topic, segment info
 
 All state-changing methods return new Continuum objects + domain events. No mutation. This makes the system testable and prevents concurrent modification bugs.
 
@@ -175,7 +175,6 @@ Events are immutable dataclass objects. The event bus publishes them synchronous
 The tag parser extracts special XML-style tags from LLM responses:
 
 - `<mira:memory_ref="uuid" />` → references specific memories
-- `<mira:touchstone>content</mira:touchstone>` → semantic intent summary
 - `<mira:my_emotion>emoji</mira:my_emotion>` → emotion tracking (for continuity)
 - `<mira:display_title>title</mira:display_title>` → segment display titles
 - `<error_analysis error_id="...">content</error_analysis>` → error analysis
@@ -206,7 +205,7 @@ MIRA has 9 tools built on a dynamic loading system. Tools you haven't loaded sho
 
 **Core tools** (loaded by default):
 - **reminder_tool**: SQLite-based reminders with contact linking, natural language dates, and timezone handling
-- **webaccess_tool**: Web scraping and HTTP requests with retry logic and domain filtering
+- **web_tool**: Web search, webpage fetching, and HTTP requests with Playwright support
 
 **Integration tools** (load on demand):
 - **continuumsearch_tool**: Hybrid vector + BM25 search across conversation history and memories with progressive disclosure
@@ -345,8 +344,8 @@ Valkey client uses singleton pattern - one instance reused across the applicatio
 
 **1. Embedding Cache** (Valkey, 15-minute TTL):
 - Stores embeddings as fp16 to save memory
-- Separate caches for AllMiniLM (384-dim) and OpenAI (1024-dim)
-- Prevents dimension conflicts
+- Separate caches for query embeddings and document embeddings (both 768-dim)
+- Uses mdbr-leaf-ir-asym for asymmetric retrieval
 
 **2. Message Cache** (Valkey, event-driven invalidation):
 - Stores recent messages for hot continuums
@@ -359,12 +358,12 @@ Valkey client uses singleton pattern - one instance reused across the applicatio
 
 ### Hybrid Embeddings
 
-Dual-model strategy for speed vs quality:
-- **AllMiniLM (384-dim)**: Local, ~1ms latency, used for real-time operations
-- **OpenAI text-embedding-3-small (1024-dim)**: Remote, higher quality, used for advanced features
+Asymmetric retrieval with mdbr-leaf-ir-asym (768-dim):
+- **Query encoding** (`encode_realtime`): Lightweight encoding for fingerprints
+- **Document encoding** (`encode_deep`): Higher quality encoding for memories and summaries
 - BGE reranker available for search refinement (configurable pool size)
 
-Single embedding generated per turn, shared across all services (memory surfacing, context building, search).
+Single embedding generated per turn, shared across all services (memory surfacing, search).
 
 ### Model Routing
 
@@ -387,7 +386,7 @@ The system prompt composer separates cached from non-cached sections. Cache metr
 ### Resource Pre-Initialization
 
 Expensive resources load at startup:
-- Hybrid embeddings provider (loads AllMiniLM + OpenAI embeddings)
+- Hybrid embeddings provider (loads mdbr-leaf-ir-asym model)
 - Continuum repository (creates DB connection pool)
 - LT memory factory (initializes all memory services)
 
@@ -420,10 +419,8 @@ This avoids first-request latency. Everything's ready before the first message.
 - Ollama (offline LLM support)
 
 **Embeddings:**
-- sentence-transformers (AllMiniLM-L6-v2, 384-dim, local)
-- OpenAI text-embedding-3-small (1024-dim, cloud)
-- BGE-M3 + BGE reranker (cross-encoder reranking)
-- ONNX Runtime (optimized inference)
+- sentence-transformers (mdbr-leaf-ir-asym, 768-dim, local)
+- BGE reranker (cross-encoder reranking)
 - PyTorch + Transformers (ML foundation)
 
 **NLP:**
@@ -467,7 +464,6 @@ This avoids first-request latency. Everything's ready before the first message.
 - Ollama (fully offline operation)
 
 **Optional:**
-- OpenAI API key (for deep embeddings; falls back to local AllMiniLM)
 - Letta API credentials (for domain knowledge blocks; system disables if unavailable)
 - Kagi API key (for enhanced web search)
 
@@ -484,7 +480,7 @@ The script handles:
 2. Dependency checking and optional auto-installation
 3. Python venv creation
 4. pip install of requirements
-5. Model downloads (spaCy ~800MB, AllMiniLM ~80MB, BGE reranker ~1.1GB, optional Playwright ~300MB)
+5. Model downloads (spaCy ~800MB, mdbr-leaf-ir-asym ~300MB, BGE reranker ~1.1GB, optional Playwright ~300MB)
 6. HashiCorp Vault initialization
 7. Database deployment (creates mira_service database)
 8. Service verification (PostgreSQL, Valkey, Vault running and accessible)

@@ -61,7 +61,7 @@ For advanced functionality, reference these specific implementations:
 | Pattern | Tool | Lines | When You Need It |
 |---------|------|-------|------------------|
 | **Async Operations** | kasa_tool.py | 567-622 | Async device discovery, network calls |
-| **API Retry Logic** | webaccess_tool.py | 469-675 | Exponential backoff, circuit breaker |
+| **API Retry Logic** | http_client.py (utils/) | 61-130 | Exponential backoff, retry mixin |
 | **Fuzzy Name Matching** | contacts_tool.py | 314-400 | Scoring partial matches, handling ambiguity |
 | | kasa_tool.py | 1234-1401 | Device name matching with suggestions |
 | **Working Memory Integration** | punchclock_tool.py | 600-610 | Publishing trinket updates, UI refresh |
@@ -70,7 +70,7 @@ For advanced functionality, reference these specific implementations:
 | **UUID Cross-Tool Linking** | reminder_tool.py | 805-847 | Linking to contacts, fetching fresh data |
 | | contacts_tool.py | 314-579 | Managing linked entities |
 | **Natural Language Dates** | reminder_tool.py | 849-917 | Parsing "tomorrow", "next week", etc. |
-| **LLM Integration** | webaccess_tool.py | 800-950 | Using LLM for content analysis and processing |
+| **LLM Integration** | web_tool.py | 250-290 | Using LLM for content extraction |
 | **Config Validation** | email_tool.py | 244-341 | Connection testing, auto-discovery of settings |
 | **Batch Operations** | - | - | *Not yet implemented - good opportunity!* |
 | **Rate Limiting** | - | - | *Not yet implemented - good opportunity!* |
@@ -111,7 +111,7 @@ Example: If a spec mentions "no notification fatigue," this implies rate limitin
 2. **Add complexity**: `contacts_tool.py` - Fuzzy search, encryption, UUID linking
 3. **Learn caching**: `weather_tool.py` - API integration, file-based caching, validation
 4. **Go async**: `kasa_tool.py` - Async operations, device management
-5. **Advanced features**: `webaccess_tool.py` - Retry logic, LLM integration
+5. **Advanced features**: `web_tool.py` - Web operations, LLM extraction
 
 **Infrastructure references:**
 ```python

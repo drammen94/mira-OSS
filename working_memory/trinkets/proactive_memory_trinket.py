@@ -19,10 +19,22 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
         """Initialize with memory cache."""
         super().__init__(event_bus, working_memory)
         self._cached_memories = []  # Store memories between updates
-    
+
     def _get_variable_name(self) -> str:
         """Proactive memory publishes to 'relevant_memories'."""
         return "relevant_memories"
+
+    def get_cached_memories(self) -> List[Dict[str, Any]]:
+        """
+        Get the currently cached memories.
+
+        Used by the orchestrator for memory retention evaluation -
+        previous turn's surfaced memories are evaluated for continued relevance.
+
+        Returns:
+            List of memory dicts from the previous turn
+        """
+        return self._cached_memories
     
     def generate_content(self, context: Dict[str, Any]) -> str:
         """
@@ -79,11 +91,9 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
         lines.append(f"Text: \"{memory.get('text', '')}\")")
 
         if memory.get('created_at'):
-            from datetime import datetime
-            from utils.timezone_utils import format_relative_time
+            from utils.timezone_utils import format_relative_time, parse_time_string
 
-            # Parse ISO timestamp and format as relative time
-            created_dt = datetime.fromisoformat(memory['created_at'])
+            created_dt = parse_time_string(memory['created_at'])
             relative_time = format_relative_time(created_dt)
             lines.append(f"Created: {relative_time}")
 
@@ -183,18 +193,20 @@ class ProactiveMemoryTrinket(EventAwareTrinket):
     
     def _format_temporal_info(self, memory: dict) -> str:
         """Format temporal metadata for a memory."""
-        from utils.timezone_utils import format_datetime
-        
+        from utils.timezone_utils import format_datetime, parse_time_string
+
         temporal_parts = []
-        
+
         if memory.get('expires_at'):
-            expiry_date = format_datetime(memory['expires_at'], 'date')
+            expires_dt = parse_time_string(memory['expires_at'])
+            expiry_date = format_datetime(expires_dt, 'date')
             temporal_parts.append(f"expires: {expiry_date}")
-        
+
         if memory.get('happens_at'):
-            event_date = format_datetime(memory['happens_at'], 'date')
+            happens_dt = parse_time_string(memory['happens_at'])
+            event_date = format_datetime(happens_dt, 'date')
             temporal_parts.append(f"happens: {event_date}")
-        
+
         if temporal_parts:
             return f" *({', '.join(temporal_parts)})*"
         return ""

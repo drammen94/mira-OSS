@@ -119,7 +119,7 @@ The `<mira:display_title>` and `<mira:complexity>` tags are for programmatic ext
 
 ## Optimization for Vector Search
 
-The synopsis will be embedded using AllMiniLM-L6-v2 and searched semantically. Optimize for retrieval:
+The synopsis will be embedded using mdbr-leaf-ir-asym (768-dim) and searched semantically. Optimize for retrieval:
 - **Canonical terminology**: "PostgreSQL query optimization" not "database speedup"
 - **Domain vocabulary**: "RLS policy configuration" not "security settings"
 - **Specificity balance**: Detailed enough to be unique, broad enough to match related queries

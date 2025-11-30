@@ -71,8 +71,8 @@
   },
   {
     "dependencies": [],
-    "description": "Base class for all tools",
-    "name": "webaccess_tool",
+    "description": "Web search, fetch webpages, and HTTP requests",
+    "name": "web_tool",
     "parameters": {},
     "required_parameters": []
   }

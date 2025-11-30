@@ -17,7 +17,7 @@ The User's name is Taylor.
 ### Security & Reliability
 - **Credential Management**: All sensitive values (API keys, passwords, database URLs) must be stored in HashiCorp Vault via `utils.vault_client` functions. Never use environment variables or hardcoded credentials. Use `UserCredentialService` from `auth.user_credentials` for per-user credential storage. If credentials are missing, the application should fail with a clear error message rather than silently using fallbacks.
 - **Fail-Fast Infrastructure**: Required infrastructure failures MUST propagate immediately. Never catch exceptions from Valkey, database, embeddings, or event bus and return None/[]/defaults - this masks outages as normal operation. Use try/except only for: (1) adding context before re-raising, (2) legitimately optional features (telemetry, cache), (3) async event handlers that will retry. Database query returning [] means "no data found", not "query failed". Make infrastructure failures loud so operators fix the root cause instead of users suffering degraded service.
-- **No Optional[X] Hedging**: When a function depends on required infrastructure, return the actual type or raise - never Optional[X] that enables None returns masking failures. `Optional[Touchstone]` lets touchstone generation silently fail; `Touchstone` forces the caller to handle the exception. Reserve Optional for genuine "value may not exist" semantics (user preference unset), not "infrastructure might be broken" scenarios.
+- **No Optional[X] Hedging**: When a function depends on required infrastructure, return the actual type or raise - never Optional[X] that enables None returns masking failures. `Optional[str]` for fingerprint lets generation silently fail; `str` forces the caller to handle the exception. Reserve Optional for genuine "value may not exist" semantics (user preference unset), not "infrastructure might be broken" scenarios.
 - **Timezone Consistency**: ALWAYS use `utils/timezone_utils.py` functions for datetime operations. Never use `datetime.now()` or `datetime.now(UTC)` directly - use `utc_now()` instead. This ensures UTC-everywhere consistency across the codebase and prevents timezone-related bugs. Import timezone utilities with `from utils.timezone_utils import utc_now, format_utc_iso` and use them consistently.
 - **Backwards Compatibility**: Don't depreciate; ablate. Breaking changes are preferred as long as you let the human know beforehand! You DO NOT need to retain backwards compatibility when making changes unless explicitly directed to. Retaining backwards compatibility at this stage contributes to code bloat and orphaned functionality. MIRA is a greenfield system design.
 - **Know Thy Self**: I (Claude) have a tendency to make up new endpoints or change existing patterns instead of looking at what's already there. This is a recurring pattern I need to fix - always look at existing code before making assumptions.
@@ -141,7 +141,7 @@ When modifying files, edit as if new code was always intended - never reference 
 - **Lint**: `flake8`
 - **Type check**: `mypy .`
 - **Format**: `black .`
-- **Database**: Always use `psql -U taylut -h localhost -d mira_service` - taylut is the superuser, mira_service is the primary database
+- **Database**: Always use `psql -U postgres -h localhost -d mira_service` - postgres is the superuser, mira_service is the primary database
 
 ### Git Workflow
 - **MANDATORY**: Invoke the `git-workflow` skill BEFORE every commit

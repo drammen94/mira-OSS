@@ -2,12 +2,12 @@
 Tests for lt_memory.vector_ops - Vector operations service.
 
 Contract-based tests using REAL components (no mocks):
-- Real HybridEmbeddingsProvider (AllMiniLM + OpenAI + BGE reranker)
+- Real HybridEmbeddingsProvider (mdbr-leaf-ir-asym 768d)
 - Real LTMemoryDB (PostgreSQL with RLS)
 - Real VectorOps service
 
 Tests verify:
-- Embedding generation (384d AllMiniLM)
+- Embedding generation (768d)
 - Memory storage with embeddings
 - Similarity search (by text, by embedding, by reference memory)
 - Reranking with real BGE reranker
@@ -21,14 +21,14 @@ from lt_memory.models import ExtractedMemory
 
 
 class TestEmbeddingGeneration:
-    """Test embedding generation with real AllMiniLM model."""
+    """Test embedding generation with real mdbr-leaf-ir-asym model."""
 
-    def test_generate_embedding_returns_384_dimensions(self, vector_ops):
-        """CONTRACT R1: generate_embedding() returns List[float] with exactly 384 dimensions."""
+    def test_generate_embedding_returns_768_dimensions(self, vector_ops):
+        """CONTRACT R1: generate_embedding() returns List[float] with exactly 768 dimensions."""
         result = vector_ops.generate_embedding("test text")
 
         assert isinstance(result, list)
-        assert len(result) == 384
+        assert len(result) == 768
         assert all(isinstance(x, float) for x in result)
 
     def test_generate_embedding_different_texts_different_embeddings(self, vector_ops):
@@ -55,7 +55,7 @@ class TestEmbeddingGeneration:
         assert isinstance(result, list)
         assert len(result) == 3
         assert all(isinstance(emb, list) for emb in result)
-        assert all(len(emb) == 384 for emb in result)
+        assert all(len(emb) == 768 for emb in result)
 
     def test_generate_embeddings_batch_empty_input(self, vector_ops):
         """EDGE CASE EC1: Empty list returns empty list."""
@@ -93,7 +93,7 @@ class TestMemoryStorage:
         assert stored_memory.text == "Database test memory"
         assert stored_memory.importance_score == 0.7
         assert stored_memory.embedding is not None
-        assert len(stored_memory.embedding) == 384
+        assert len(stored_memory.embedding) == 768
 
     def test_store_memories_empty_list(self, vector_ops):
         """EDGE CASE: Empty memories list returns empty list."""
@@ -171,10 +171,10 @@ class TestSimilaritySearch:
         assert len(results) > 0
 
     def test_find_similar_by_embedding_validates_dimensions(self, vector_ops):
-        """CONTRACT E1: Raises ValueError when embedding dimension != 384."""
+        """CONTRACT E1: Raises ValueError when embedding dimension != 768."""
         wrong_dim_embedding = [0.1] * 256  # Wrong dimension
 
-        with pytest.raises(ValueError, match="384-dimensional"):
+        with pytest.raises(ValueError, match="768-dimensional"):
             vector_ops.find_similar_by_embedding(wrong_dim_embedding)
 
     def test_find_similar_by_embedding_accepts_numpy_array(self, vector_ops, test_user):
@@ -184,7 +184,7 @@ class TestSimilaritySearch:
         vector_ops.store_memories_with_embeddings(memories)
 
         # Search with numpy array
-        query_embedding = np.array([0.1] * 384, dtype=np.float32)
+        query_embedding = np.array([0.1] * 768, dtype=np.float32)
         results = vector_ops.find_similar_by_embedding(query_embedding)
 
         # Should not raise error
@@ -256,7 +256,7 @@ class TestUpdateOperations:
         assert updated.id == memory_id
         assert updated.text == "Updated text"
         assert updated.embedding is not None
-        assert len(updated.embedding) == 384
+        assert len(updated.embedding) == 768
 
     def test_update_memory_embedding_regenerates_embedding(self, vector_ops, lt_memory_db, test_user):
         """Updating text should regenerate embedding to match new text."""
@@ -424,7 +424,7 @@ class TestEdgeCases:
         long_text = "word " * 1000  # 1000 words
         embedding = vector_ops.generate_embedding(long_text)
 
-        assert len(embedding) == 384
+        assert len(embedding) == 768
 
     def test_special_characters_in_text(self, vector_ops, test_user):
         """Special characters should be handled."""

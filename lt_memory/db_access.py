@@ -241,13 +241,13 @@ class LTMemoryDB:
         with self.session_manager.get_session(resolved_user_id) as session:
             query = """
             SELECT * FROM memories
-            WHERE id = ANY(%(memory_ids)s::uuid[])
+            WHERE id = ANY(%s::uuid[])
             ORDER BY importance_score DESC
             """
 
-            results = session.execute_query(query, {
-                'memory_ids': [str(mid) for mid in memory_ids]
-            })
+            results = session.execute_query(query, (
+                [str(mid) for mid in memory_ids],
+            ))
 
             return [Memory(**row) for row in results]
 
@@ -345,7 +345,7 @@ class LTMemoryDB:
         Vector similarity search using cosine distance.
 
         Args:
-            query_embedding: Query vector (384d AllMiniLM)
+            query_embedding: Query vector (768d mdbr-leaf-ir-asym)
             limit: Maximum results to return
             similarity_threshold: Minimum cosine similarity (0-1)
             min_importance: Minimum importance score filter
@@ -458,19 +458,20 @@ class LTMemoryDB:
             return 0
 
         # Build UPDATE query using formula from scoring_formula.sql
+        # Use positional param %s with tuple for psycopg2 array adaptation
         recalc_query = f"""
         UPDATE memories m
         SET
             importance_score = {_SCORING_FORMULA_SQL},
             updated_at = NOW()
         FROM users u
-        WHERE m.id = ANY(%(memory_ids)s::uuid[])
+        WHERE m.id = ANY(%s::uuid[])
           AND m.user_id = u.id
         """
 
-        result = session.execute_update(recalc_query, {
-            'memory_ids': [str(mid) for mid in memory_ids]
-        })
+        result = session.execute_update(recalc_query, (
+            [str(mid) for mid in memory_ids],
+        ))
 
         return result if result else 0
 
@@ -563,19 +564,20 @@ class LTMemoryDB:
             updated_count = self._recalculate_importance_scores(stale_ids, session)
 
             # Archive memories that fell below threshold
+            # Use positional param %s with tuple for psycopg2 array adaptation
             archive_query = """
             UPDATE memories
             SET is_archived = TRUE,
                 archived_at = NOW()
-            WHERE id = ANY(%(memory_ids)s::uuid[])
+            WHERE id = ANY(%s::uuid[])
               AND importance_score <= 0.001
               AND is_archived = FALSE
             RETURNING id
             """
 
-            archived = session.execute_query(archive_query, {
-                'memory_ids': [str(mid) for mid in stale_ids]
-            })
+            archived = session.execute_query(archive_query, (
+                [str(mid) for mid in stale_ids],
+            ))
             archived_count = len(archived)
 
             logger.info(
@@ -642,15 +644,15 @@ class LTMemoryDB:
             UPDATE memories
             SET is_archived = TRUE,
                 archived_at = NOW()
-            WHERE id = ANY(%(memory_ids)s::uuid[])
+            WHERE id = ANY(%s::uuid[])
               AND importance_score <= 0.001
               AND is_archived = FALSE
             RETURNING id
             """
 
-            archived = session.execute_query(archive_query, {
-                'memory_ids': [str(mid) for mid in temporal_ids]
-            })
+            archived = session.execute_query(archive_query, (
+                [str(mid) for mid in temporal_ids],
+            ))
             archived_count = len(archived)
 
             logger.info(
@@ -983,13 +985,13 @@ class LTMemoryDB:
         with self.session_manager.get_session(resolved_user_id) as session:
             query = """
             SELECT * FROM entities
-            WHERE id = ANY(%(entity_ids)s::uuid[])
+            WHERE id = ANY(%s::uuid[])
             ORDER BY link_count DESC
             """
 
-            results = session.execute_query(query, {
-                'entity_ids': [str(eid) for eid in entity_ids]
-            })
+            results = session.execute_query(query, (
+                [str(eid) for eid in entity_ids],
+            ))
 
             return [Entity(**row) for row in results]
 

@@ -8,6 +8,7 @@ import anthropic
 import logging
 from typing import Optional
 
+from clients.vault_client import get_api_key
 from config.config import (
     LTMemoryConfig,
     ExtractionConfig,
@@ -55,7 +56,6 @@ class LTMemoryFactory:
             session_manager=session_manager,
             embeddings_provider=embeddings,
             llm_provider=llm,
-            anthropic_client=anthropic,
             conversation_repo=repo
         )
 
@@ -71,6 +71,11 @@ class LTMemoryFactory:
     - Testable (create fresh instances with mocks)
     - Clear lifecycle (construct -> use -> cleanup)
     - Each factory instance is independent (thread-safe within instance)
+
+    Note:
+        The Batch API client is created internally using the api_key_name from
+        config.batching. This isolates batch operations (memory extraction,
+        relationship classification) from interactive chat API usage.
     """
 
     def __init__(
@@ -79,7 +84,6 @@ class LTMemoryFactory:
         session_manager: LTMemorySessionManager,
         embeddings_provider,
         llm_provider,
-        anthropic_client,
         conversation_repo
     ):
         """
@@ -88,10 +92,13 @@ class LTMemoryFactory:
         Args:
             config: LT_Memory configuration
             session_manager: Database session manager
-            embeddings_provider: Embeddings provider (AllMiniLM)
+            embeddings_provider: Embeddings provider (mdbr-leaf-ir-asym 768d)
             llm_provider: LLM provider for extraction/linking/refinement
-            anthropic_client: Anthropic SDK client for Batch API
             conversation_repo: Continuum repository for message loading
+
+        Note:
+            The Batch API client is created internally using config.batching.api_key_name
+            to isolate batch operations from chat API rate limits and costs.
         """
         logger.info("Initializing LTMemoryFactory")
 
@@ -99,8 +106,13 @@ class LTMemoryFactory:
         self._session_manager = session_manager
         self._embeddings_provider = embeddings_provider
         self._llm_provider = llm_provider
-        self._anthropic_client = anthropic_client
         self._conversation_repo = conversation_repo
+
+        # Create dedicated Anthropic client for Batch API operations
+        # Separate from chat client to isolate rate limits and enable independent cost tracking
+        batch_api_key = get_api_key(config.batching.api_key_name)
+        self._batch_anthropic_client = anthropic.Anthropic(api_key=batch_api_key)
+        logger.info(f"Batch API client initialized with key '{config.batching.api_key_name}'")
 
         # Track initialization order for reverse cleanup
         self._service_init_order = []
@@ -191,7 +203,7 @@ class LTMemoryFactory:
                 vector_ops=self.vector_ops,
                 db=self.db,
                 llm_provider=self._llm_provider,
-                anthropic_client=self._anthropic_client,
+                anthropic_client=self._batch_anthropic_client,
                 batching_config=self.config.batching,
                 extraction_config=self.config.extraction
             )
@@ -211,7 +223,7 @@ class LTMemoryFactory:
             self.batch_coordinator = BatchCoordinator(
                 config=self.config.batching,
                 db=self.db,
-                anthropic_client=self._anthropic_client
+                anthropic_client=self._batch_anthropic_client
             )
             self._service_init_order.append(self.batch_coordinator)
 
@@ -228,7 +240,7 @@ class LTMemoryFactory:
 
             logger.debug("Initializing result handlers...")
             self.extraction_result_handler = ExtractionBatchResultHandler(
-                anthropic_client=self._anthropic_client,
+                anthropic_client=self._batch_anthropic_client,
                 memory_processor=self.memory_processor,
                 vector_ops=self.vector_ops,
                 db=self.db,
@@ -238,7 +250,7 @@ class LTMemoryFactory:
             self._service_init_order.append(self.extraction_result_handler)
 
             self.relationship_result_handler = RelationshipBatchResultHandler(
-                anthropic_client=self._anthropic_client,
+                anthropic_client=self._batch_anthropic_client,
                 linking_service=self.linking,
                 db=self.db
             )
@@ -255,7 +267,7 @@ class LTMemoryFactory:
                 extraction_service=self.extraction,
                 linking_service=self.linking,
                 vector_ops=self.vector_ops,
-                anthropic_client=self._anthropic_client,
+                anthropic_client=self._batch_anthropic_client,
                 conversation_repo=self._conversation_repo,
                 llm_provider=self._llm_provider
             )
@@ -323,7 +335,6 @@ def get_lt_memory_factory(
     session_manager: LTMemorySessionManager = None,
     embeddings_provider = None,
     llm_provider = None,
-    anthropic_client = None,
     conversation_repo = None,
     force_new: bool = False
 ) -> LTMemoryFactory:
@@ -354,7 +365,6 @@ def get_lt_memory_factory(
         session_manager: Database session manager (required on first call)
         embeddings_provider: Embeddings provider (required on first call)
         llm_provider: LLM provider (required on first call)
-        anthropic_client: Anthropic SDK client (required on first call)
         conversation_repo: Continuum repository (required on first call)
         force_new: Force creation of a new instance (for testing)
 
@@ -363,6 +373,10 @@ def get_lt_memory_factory(
 
     Raises:
         RuntimeError: If called without required arguments on first call
+
+    Note:
+        The Batch API client is created internally by the factory using the
+        api_key_name from config.batching (default: 'anthropic_batch_key').
     """
     global _lt_memory_factory_instance
 
@@ -374,11 +388,11 @@ def get_lt_memory_factory(
     if _lt_memory_factory_instance is None:
         # First call - all arguments required
         if not all([config, session_manager, embeddings_provider,
-                    llm_provider, anthropic_client, conversation_repo]):
+                    llm_provider, conversation_repo]):
             raise RuntimeError(
                 "First call to get_lt_memory_factory requires all arguments: "
                 "config, session_manager, embeddings_provider, llm_provider, "
-                "anthropic_client, conversation_repo"
+                "conversation_repo"
             )
 
         logger.info("Creating new LTMemoryFactory singleton")
@@ -387,7 +401,6 @@ def get_lt_memory_factory(
             session_manager=session_manager,
             embeddings_provider=embeddings_provider,
             llm_provider=llm_provider,
-            anthropic_client=anthropic_client,
             conversation_repo=conversation_repo
         )
 

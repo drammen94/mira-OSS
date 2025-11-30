@@ -18,13 +18,8 @@ class TagParser:
     ERROR_ANALYSIS_PATTERN = re.compile(r'<error_analysis\s+error_id=["\']([^"\']+)["\']>(.*?)</error_analysis>', re.DOTALL | re.IGNORECASE)
     # Pattern for memory references: <mira:memory_ref="UUID" />
     MEMORY_REF_PATTERN = re.compile(
-        r'<mira:memory_ref\s*=\s*["\']([a-f0-9-]{36})["\']?\s*/?>', 
+        r'<mira:memory_ref\s*=\s*["\']([a-f0-9-]{36})["\']?\s*/?>',
         re.IGNORECASE
-    )
-    # Pattern for touchstone extraction: <mira:touchstone>content</mira:touchstone>
-    TOUCHSTONE_PATTERN = re.compile(
-        r'<mira:touchstone>(.*?)</mira:touchstone>',
-        re.DOTALL | re.IGNORECASE
     )
     # Pattern for emotion emoji: <mira:my_emotion>emoji</mira:my_emotion>
     EMOTION_PATTERN = re.compile(
@@ -66,14 +61,6 @@ class TagParser:
         for match in self.MEMORY_REF_PATTERN.finditer(response_text):
             memory_refs.append(match.group(1))
 
-        # Extract touchstone
-        touchstone = None
-        touchstone_match = self.TOUCHSTONE_PATTERN.search(response_text)
-        if touchstone_match:
-            touchstone_text = touchstone_match.group(1).strip()
-            if touchstone_text:
-                touchstone = touchstone_text
-
         # Extract emotion emoji
         emotion = None
         emotion_match = self.EMOTION_PATTERN.search(response_text)
@@ -99,7 +86,6 @@ class TagParser:
         parsed = {
             'error_analysis': error_analyses,
             'referenced_memories': memory_refs,
-            'touchstone': touchstone,
             'emotion': emotion,
             'display_title': display_title,
             'complexity': complexity,
@@ -114,7 +100,7 @@ class TagParser:
 
         Args:
             text: Text with tags
-            preserve_tags: Optional list of tag names to preserve (e.g., ['my_emotion', 'touchstone'])
+            preserve_tags: Optional list of tag names to preserve (e.g., ['my_emotion'])
 
         Returns:
             Text with tags removed (except preserved ones)

@@ -219,13 +219,14 @@ class GenericOpenAIClient:
             logger.error("Generic OpenAI client request timed out")
             raise TimeoutError("Generic OpenAI client request timed out")
         except requests.HTTPError as e:
-            # Log full error for debugging
+            # Log full error for debugging and extract error details
+            error_body = None
             try:
                 error_body = e.response.json()
                 logger.error(f"Generic OpenAI client HTTP error: {e.response.status_code} - {error_body}")
             except:
                 logger.error(f"Generic OpenAI client HTTP error: {e.response.status_code} - {e.response.text}")
-            self._handle_http_error(e)
+            self._handle_http_error(e, error_body)
         except Exception as e:
             logger.error(f"Generic OpenAI client error: {e}")
             raise RuntimeError(f"Generic OpenAI client error: {e}")
@@ -427,18 +428,33 @@ class GenericOpenAIClient:
         logger.debug(f"Generic OpenAI response: {len(content_blocks)} blocks, {stop_reason}")
         return GenericOpenAIResponse(content_blocks, stop_reason, usage)
 
-    def _handle_http_error(self, error: requests.HTTPError):
+    def _handle_http_error(self, error: requests.HTTPError, error_body: dict = None):
         """
         Map HTTP errors to exceptions that LLMProvider expects.
 
         Args:
             error: requests.HTTPError from failed request
+            error_body: Optional parsed JSON error response
 
         Raises:
             PermissionError: For authentication failures
+            ValueError: For context length exceeded errors
             RuntimeError: For rate limits and server errors
         """
         status = error.response.status_code
+
+        # Check for context length exceeded error (400 with specific error code)
+        if status == 400 and error_body:
+            error_info = error_body.get("error", {})
+            error_code = error_info.get("code", "")
+            error_message = error_info.get("message", "")
+
+            if "context_length" in error_code or "reduce the length" in error_message.lower():
+                logger.error("Generic OpenAI client context length exceeded")
+                raise ValueError(
+                    "Content too large for model context window. "
+                    "Reduce the message length or use a model with larger context."
+                )
 
         if status == 401 or status == 403:
             logger.error(f"Generic OpenAI client authentication failed: {status}")

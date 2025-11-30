@@ -183,7 +183,7 @@ async def lifespan(app: FastAPI):
     # Pre-initialize expensive singleton resources at startup
     logger.info("Pre-initializing singleton resources...")
     
-    # Initialize embeddings provider (loads AllMiniLM + OpenAI embeddings)
+    # Initialize embeddings provider (loads mdbr-leaf-ir-asym 768d model)
     from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
     embeddings_provider = get_hybrid_embeddings_provider()
     logger.info(f"Embeddings provider initialized: {type(embeddings_provider).__name__}")
@@ -206,12 +206,12 @@ async def lifespan(app: FastAPI):
         lt_memory_llm_provider = LLMProvider(tool_repo=None)
 
         # Initialize lt_memory factory as singleton
+        # Note: Batch API client is created internally using config.batching.api_key_name
         lt_memory_factory = get_lt_memory_factory(
             config=config.lt_memory,
             session_manager=get_shared_session_manager(),
             embeddings_provider=embeddings_provider,  # Reuse from above
             llm_provider=lt_memory_llm_provider,
-            anthropic_client=lt_memory_llm_provider.anthropic_client,  # Reuse from LLMProvider
             conversation_repo=continuum_repo  # Reuse from above
         )
         logger.info("lt_memory factory initialized as singleton")
@@ -244,7 +244,7 @@ async def lifespan(app: FastAPI):
         logger.info("PlaywrightService initialized")
     except Exception as e:
         logger.warning(f"Failed to initialize PlaywrightService: {e}")
-        logger.warning("webaccess_tool will not be able to render JavaScript-heavy pages")
+        logger.warning("web_tool will not be able to render JavaScript-heavy pages")
 
     # Event bus is synchronous
     logger.info("Event bus initialized (synchronous)")

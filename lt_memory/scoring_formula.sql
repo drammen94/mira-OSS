@@ -20,7 +20,7 @@
 --
 -- CONSTANTS:
 -- - BASELINE_ACCESS_RATE = 0.02 (1 access per 50 activity days)
--- - MOMENTUM_DECAY_RATE = 0.95 (5% fade per activity day)
+-- - MOMENTUM_DECAY_RATE = 0.95 (5%% fade per activity day)
 -- - MIN_AGE_DAYS = 7 (prevents spikes for new memories)
 -- - SIGMOID_CENTER = 2.0 (maps average memories to ~0.5 importance)
 -- - EXPIRATION_TRAILOFF_DAYS = 5 (grace period after expires_at)
@@ -52,7 +52,7 @@ ROUND(CAST(
                 (
                     -- VALUE SCORE: access rate vs baseline with momentum decay
                     LN(1 + (
-                        -- Effective access count with momentum decay (5% per activity day)
+                        -- Effective access count with momentum decay (5%% per activity day)
                         (m.access_count * POWER(0.95,
                             GREATEST(0, u.cumulative_activity_days - COALESCE(m.activity_days_at_last_access, m.activity_days_at_creation, 0))
                         )) /

@@ -304,7 +304,7 @@ class SegmentCollapseHandler:
             )
 
             # Generate embedding for segment search (required for semantic segment search)
-            embedding = self.embeddings_provider.encode_realtime(summary_text)
+            embedding = self.embeddings_provider.encode_deep(summary_text)
 
             # Convert ndarray to list for JSON serialization (storage boundary)
             embedding_list = embedding.tolist()

@@ -45,7 +45,7 @@ apscheduler      # Task scheduling - memory_extraction_service.py, auth_service.
 httpx[http2]     # Modern HTTP client with HTTP/2 support - tools, LLM provider, embeddings, weather/web tools
 aiohttp          # Async HTTP - kasa_tool.py for smart home control
 mcp              # Model Context Protocol SDK - mcp_client.py for MCP server connections
-playwright       # Headless browser for JavaScript-rendered webpages - webaccess_tool.py
+playwright       # Headless browser for JavaScript-rendered webpages - web_tool.py
 
 # == TOOL-SPECIFIC LIBRARIES ==
 googlemaps       # Google Maps API - maps_tool.py

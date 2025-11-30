@@ -191,6 +191,43 @@ def register_lt_memory_jobs(scheduler_service, lt_memory_factory) -> bool:
         raise RuntimeError("Failed to register temporal score recalculation job - scheduler job registration is critical")
     logger.info("Successfully registered temporal score recalculation job (daily interval)")
 
+    # Register bulk score recalculation job (daily intervals)
+    def run_bulk_score_recalculation():
+        """Recalculate scores for stale memories (not accessed in 7+ days) across all users."""
+        try:
+            from utils.user_context import set_current_user_id, clear_user_context
+            db = lt_memory_factory.db
+            users = db.get_users_with_memory_enabled()
+
+            total_updated = 0
+            for user in users:
+                user_id = str(user["id"])
+                set_current_user_id(user_id)
+                try:
+                    db = lt_memory_factory.db
+                    updated = db.bulk_recalculate_scores(user_id=user_id, batch_size=1000)
+                    total_updated += updated
+                finally:
+                    clear_user_context()
+
+            logger.info(f"Bulk score recalculation sweep: updated {total_updated} stale memories across all users")
+            return {"memories_updated": total_updated}
+        except Exception as e:
+            logger.error(f"Error in bulk score recalculation: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    success_bulk_recalc = scheduler_service.register_job(
+        job_id="lt_memory_bulk_score_recalculation",
+        func=run_bulk_score_recalculation,
+        trigger=IntervalTrigger(days=1),
+        component="lt_memory",
+        description="Recalculate importance scores for stale memories (not accessed in 7+ days) daily"
+    )
+
+    if not success_bulk_recalc:
+        raise RuntimeError("Failed to register bulk score recalculation job - scheduler job registration is critical")
+    logger.info("Successfully registered bulk score recalculation job (daily interval)")
+
     # Register entity garbage collection job (monthly intervals)
     def run_entity_gc_for_all_users():
         """Run entity garbage collection for all users."""

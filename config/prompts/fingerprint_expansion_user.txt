@@ -1,0 +1,9 @@
+<recent_conversation>
+{conversation_turns}
+</recent_conversation>
+
+<current_message>
+{user_message}
+</current_message>
+{previous_memories}
+Generate the fingerprint and evaluate memory retention:

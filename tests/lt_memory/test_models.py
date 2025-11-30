@@ -58,7 +58,7 @@ class TestMemory:
         memory_id = uuid4()
         user_id = uuid4()
         now = datetime.now(timezone.utc)
-        embedding = [0.1] * 384
+        embedding = [0.1] * 768
 
         memory = Memory(
             id=memory_id,

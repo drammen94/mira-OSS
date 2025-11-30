@@ -210,7 +210,7 @@ CREATE TABLE IF NOT EXISTS continuums (
 );
 
 COMMENT ON TABLE continuums IS 'Continuous timeline of user interactions (one per user, replaces discrete conversations)';
-COMMENT ON COLUMN continuums.metadata IS 'Flexible storage for last_touchstone, last_touchstone_embedding, etc.';
+COMMENT ON COLUMN continuums.metadata IS 'Flexible storage for continuum-level configuration and state';
 
 CREATE TABLE IF NOT EXISTS messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -229,9 +229,9 @@ COMMENT ON COLUMN messages.metadata IS 'Message metadata: has_tool_calls, tool_c
 ALTER TABLE messages ALTER COLUMN content SET COMPRESSION lz4;
 
 -- Add segment embedding column for segment sentinels
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS segment_embedding vector(384);
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS segment_embedding vector(768);
 
-COMMENT ON COLUMN messages.segment_embedding IS 'AllMiniLM embedding (384-dim) for segment boundary sentinels (used for segment search)';
+COMMENT ON COLUMN messages.segment_embedding IS 'mdbr-leaf-ir-asym embedding (768-dim) for segment boundary sentinels (used for segment search)';
 
 -- =====================================================================
 -- MESSAGE INDEXES
@@ -247,7 +247,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_continuum_id ON messages(continuum_id);
 CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
 
 COMMENT ON TABLE messages IS 'All conversation messages; segments implemented as sentinel messages with is_segment_boundary=true in metadata';
-COMMENT ON COLUMN messages.segment_embedding IS 'Vector embedding for segment sentinels, enables semantic segment search. See docs/SystemsOverview/segment_system_overview.md for architecture details.';
+COMMENT ON COLUMN messages.segment_embedding IS 'mdbr-leaf-ir-asym 768d embedding for segment sentinels. See docs/SystemsOverview/segment_system_overview.md for architecture details.';
 
 -- =====================================================================
 -- MEMORIES TABLE (core long-term memory storage)
@@ -257,7 +257,7 @@ CREATE TABLE IF NOT EXISTS memories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     text TEXT NOT NULL,
-    embedding vector(384),  -- AllMiniLM embeddings for fast memory search
+    embedding vector(768),  -- mdbr-leaf-ir-asym embeddings for memory search
     search_vector tsvector,  -- Full-text search vector for BM25-style retrieval
     importance_score NUMERIC(5,3) NOT NULL DEFAULT 0.5 CHECK (importance_score >= 0 AND importance_score <= 1),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -289,7 +289,7 @@ CREATE TABLE IF NOT EXISTS memories (
 
 COMMENT ON TABLE memories IS 'Long-term memory storage with embeddings, links, and activity-based decay';
 COMMENT ON COLUMN memories.text IS 'Memory content text';
-COMMENT ON COLUMN memories.embedding IS 'AllMiniLM 384-dimensional embedding for semantic similarity search';
+COMMENT ON COLUMN memories.embedding IS 'mdbr-leaf-ir-asym 768-dimensional embedding for semantic similarity search';
 COMMENT ON COLUMN memories.search_vector IS 'Full-text search vector for BM25-style retrieval';
 COMMENT ON COLUMN memories.importance_score IS 'Memory importance (0.0-1.0) used for retrieval ranking';
 COMMENT ON COLUMN memories.happens_at IS 'When the memory event occurred (for temporal context)';

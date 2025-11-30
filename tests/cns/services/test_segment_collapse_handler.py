@@ -6,6 +6,7 @@ complete collapse pipeline from timeout → summary → persistence → downstre
 Only mocks LLM calls (external/expensive) - everything else is real infrastructure.
 """
 import pytest
+import numpy as np
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -29,11 +30,8 @@ from tests.fixtures.core import TEST_USER_EMAIL, ensure_test_user_exists
 def mock_summary_generator():
     """Provide mock summary generator (LLM call is expensive)."""
     generator = Mock()
-    # Default: return successful summary
-    generator.generate_summary.return_value = Message(
-        content="Test summary",
-        role="assistant"
-    )
+    # Default: return successful summary as (synopsis, display_title, complexity) tuple
+    generator.generate_summary.return_value = ("Test summary", "Test Title", 2)
     return generator
 
 
@@ -41,8 +39,8 @@ def mock_summary_generator():
 def mock_embeddings_provider():
     """Provide mock embeddings provider (external API call)."""
     provider = Mock()
-    # Default: return 384-dim embedding
-    provider.encode_384.return_value = [0.5] * 384
+    # Default: return 768-dim embedding
+    provider.encode_deep.return_value = np.array([0.5] * 768)
     return provider
 
 
@@ -53,22 +51,20 @@ class TestRealCollapseOrchestration:
         self,
         authenticated_user,
         conversation_repository,
+        continuum_pool,
         mock_summary_generator,
         mock_embeddings_provider
     ):
         """CONTRACT: Complete flow from timeout → database persistence."""
         user_id = authenticated_user['user_id']
+        continuum_id = authenticated_user['continuum_id']
         set_current_user_id(user_id)
         continuum_repo = conversation_repository
         event_bus = EventBus()
 
-        # Create continuum
-        continuum = continuum_repo.create_continuum(user_id)
-        continuum_id = str(continuum.id)
-
         # Create segment sentinel and messages in database
         sentinel = create_segment_boundary_sentinel(utc_now(), continuum_id)
-        add_tools_to_segment(sentinel, ["webaccess_tool"])
+        add_tools_to_segment(sentinel, ["web_tool"])
         segment_id = get_segment_id(sentinel)
 
         msg1 = Message(content="user message", role="user")
@@ -83,6 +79,7 @@ class TestRealCollapseOrchestration:
             summary_generator=mock_summary_generator,
             embeddings_provider=mock_embeddings_provider,
             event_bus=event_bus,
+            continuum_pool=continuum_pool,
             lt_memory_factory=None
         )
 
@@ -98,11 +95,14 @@ class TestRealCollapseOrchestration:
         handler.handle_timeout(event)
 
         # Verify collapsed sentinel persisted to database
-        messages = continuum_repo.load_messages(continuum_id, user_id)
+        collapsed_sentinels = continuum_repo.load_messages_with_metadata(
+            continuum_id, user_id,
+            metadata_filters={'is_segment_boundary': 'true', 'status': 'collapsed'}
+        )
 
-        # Find collapsed sentinel
+        # Find our specific sentinel
         collapsed_sentinel = next(
-            (m for m in messages if get_segment_id(m) == segment_id),
+            (m for m in collapsed_sentinels if get_segment_id(m) == segment_id),
             None
         )
 
@@ -113,34 +113,35 @@ class TestRealCollapseOrchestration:
 
     def test_collapsed_sentinel_has_embedding_in_database(
         self,
-        test_user,
+        authenticated_user,
         continuum_repo,
         event_bus,
+        continuum_pool,
         mock_summary_generator,
         mock_embeddings_provider
     ):
         """CONTRACT: Embedding persisted to segment_embedding column."""
-        user_id = test_user['id']
+        user_id = authenticated_user['user_id']
+        continuum_id = authenticated_user['continuum_id']
         set_current_user_id(user_id)
-
-        # Create continuum and segment
-        continuum = continuum_repo.create_continuum(user_id)
-        continuum_id = str(continuum.id)
 
         sentinel = create_segment_boundary_sentinel(utc_now(), continuum_id)
         segment_id = get_segment_id(sentinel)
 
-        continuum_repo.save_message(sentinel, continuum_id, user_id)
+        # Must have actual messages for collapse (handler requires non-empty message list)
+        msg1 = Message(content="test message", role="user")
+        continuum_repo.save_messages_batch([sentinel, msg1], continuum_id, user_id)
 
         # Create handler
-        embedding_vector = [0.7] * 384
-        mock_embeddings_provider.encode_384.return_value = embedding_vector
+        embedding_vector = np.array([0.7] * 768)
+        mock_embeddings_provider.encode_deep.return_value = embedding_vector
 
         handler = SegmentCollapseHandler(
             continuum_repo=continuum_repo,
             summary_generator=mock_summary_generator,
             embeddings_provider=mock_embeddings_provider,
             event_bus=event_bus,
+            continuum_pool=continuum_pool,
             lt_memory_factory=None
         )
 
@@ -171,22 +172,19 @@ class TestRealCollapseOrchestration:
 
     def test_events_published_to_real_event_bus(
         self,
-        test_user,
+        authenticated_user,
         continuum_repo,
         event_bus,
+        continuum_pool,
         mock_summary_generator,
         mock_embeddings_provider
     ):
         """CONTRACT: SegmentCollapsedEvent and ManifestUpdatedEvent published."""
-        user_id = test_user['id']
+        user_id = authenticated_user['user_id']
+        continuum_id = authenticated_user['continuum_id']
         set_current_user_id(user_id)
 
-        # Create continuum and segment
-        continuum = continuum_repo.create_continuum(user_id)
-        continuum_id = str(continuum.id)
-
         sentinel = create_segment_boundary_sentinel(utc_now(), continuum_id)
-        sentinel.metadata['message_count'] = 3
         segment_id = get_segment_id(sentinel)
 
         msg1 = Message(content="test", role="user")
@@ -211,6 +209,7 @@ class TestRealCollapseOrchestration:
             summary_generator=mock_summary_generator,
             embeddings_provider=mock_embeddings_provider,
             event_bus=event_bus,
+            continuum_pool=continuum_pool,
             lt_memory_factory=None
         )
 
@@ -234,23 +233,20 @@ class TestRealCollapseOrchestration:
         assert collapsed_event.user_id == user_id
         assert collapsed_event.segment_id == segment_id
         assert collapsed_event.summary == "Test summary"
-        assert collapsed_event.message_count == 3
 
     def test_summary_generator_called_with_correct_messages(
         self,
-        test_user,
+        authenticated_user,
         continuum_repo,
         event_bus,
+        continuum_pool,
         mock_summary_generator,
         mock_embeddings_provider
     ):
         """CONTRACT: Summary generator receives correct message list."""
-        user_id = test_user['id']
+        user_id = authenticated_user['user_id']
+        continuum_id = authenticated_user['continuum_id']
         set_current_user_id(user_id)
-
-        # Create continuum and segment
-        continuum = continuum_repo.create_continuum(user_id)
-        continuum_id = str(continuum.id)
 
         sentinel = create_segment_boundary_sentinel(utc_now(), continuum_id)
         segment_id = get_segment_id(sentinel)
@@ -265,7 +261,7 @@ class TestRealCollapseOrchestration:
         msg3 = Message(content="third", role="user")
 
         # Next segment boundary to stop collection
-        next_sentinel = create_segment_boundary_sentinel(utc_now(), continuum_id, user_id)
+        next_sentinel = create_segment_boundary_sentinel(utc_now(), continuum_id)
 
         continuum_repo.save_messages_batch(
             [sentinel, msg1, msg2, session_boundary, msg3, next_sentinel],
@@ -279,6 +275,7 @@ class TestRealCollapseOrchestration:
             summary_generator=mock_summary_generator,
             embeddings_provider=mock_embeddings_provider,
             event_bus=event_bus,
+            continuum_pool=continuum_pool,
             lt_memory_factory=None
         )
 
@@ -306,19 +303,17 @@ class TestRealCollapseOrchestration:
 
     def test_handles_missing_sentinel_gracefully(
         self,
-        test_user,
+        authenticated_user,
         continuum_repo,
         event_bus,
+        continuum_pool,
         mock_summary_generator,
         mock_embeddings_provider
     ):
         """CONTRACT: Returns early without errors when sentinel not found."""
-        user_id = test_user['id']
+        user_id = authenticated_user['user_id']
+        continuum_id = authenticated_user['continuum_id']
         set_current_user_id(user_id)
-
-        # Create continuum but no sentinel
-        continuum = continuum_repo.create_continuum(user_id)
-        continuum_id = str(continuum.id)
 
         # Subscribe to events
         events_published = []
@@ -330,6 +325,7 @@ class TestRealCollapseOrchestration:
             summary_generator=mock_summary_generator,
             embeddings_provider=mock_embeddings_provider,
             event_bus=event_bus,
+            continuum_pool=continuum_pool,
             lt_memory_factory=None
         )
 
@@ -351,20 +347,18 @@ class TestRealCollapseOrchestration:
         # Summary generator should not be called
         mock_summary_generator.generate_summary.assert_not_called()
 
-    def test_continues_with_fallback_on_summary_generation_failure(
+    def test_collapse_fails_when_summary_generation_fails(
         self,
-        test_user,
+        authenticated_user,
         continuum_repo,
         event_bus,
+        continuum_pool,
         mock_embeddings_provider
     ):
-        """CONTRACT: Uses fallback summary when LLM generation fails."""
-        user_id = test_user['id']
+        """CONTRACT: Collapse fails (caught internally) when LLM generation fails."""
+        user_id = authenticated_user['user_id']
+        continuum_id = authenticated_user['continuum_id']
         set_current_user_id(user_id)
-
-        # Create continuum and segment
-        continuum = continuum_repo.create_continuum(user_id)
-        continuum_id = str(continuum.id)
 
         sentinel = create_segment_boundary_sentinel(utc_now(), continuum_id)
         segment_id = get_segment_id(sentinel)
@@ -382,6 +376,7 @@ class TestRealCollapseOrchestration:
             summary_generator=failing_generator,
             embeddings_provider=mock_embeddings_provider,
             event_bus=event_bus,
+            continuum_pool=continuum_pool,
             lt_memory_factory=None
         )
 
@@ -389,7 +384,7 @@ class TestRealCollapseOrchestration:
         collapsed_events = []
         event_bus.subscribe('SegmentCollapsedEvent', collapsed_events.append)
 
-        # Fire event
+        # Fire event - handler catches error internally and logs
         event = SegmentTimeoutEvent.create(
             continuum_id=continuum_id,
             user_id=user_id,
@@ -398,36 +393,35 @@ class TestRealCollapseOrchestration:
             local_hour=14
         )
 
-        # Should not raise
+        # Should not raise (error caught internally)
         handler.handle_timeout(event)
 
-        # Event should still be published with fallback summary
-        assert len(collapsed_events) == 1
-        assert "Conversation segment" in collapsed_events[0].summary
+        # No events published (collapse failed)
+        assert len(collapsed_events) == 0
 
-    def test_continues_with_none_embedding_on_encoding_failure(
+    def test_collapse_fails_when_embedding_generation_fails(
         self,
-        test_user,
+        authenticated_user,
         continuum_repo,
         event_bus,
+        continuum_pool,
         mock_summary_generator
     ):
-        """CONTRACT: Processing continues when embedding generation fails."""
-        user_id = test_user['id']
+        """CONTRACT: Collapse fails (caught internally) when embedding generation fails."""
+        user_id = authenticated_user['user_id']
+        continuum_id = authenticated_user['continuum_id']
         set_current_user_id(user_id)
-
-        # Create continuum and segment
-        continuum = continuum_repo.create_continuum(user_id)
-        continuum_id = str(continuum.id)
 
         sentinel = create_segment_boundary_sentinel(utc_now(), continuum_id)
         segment_id = get_segment_id(sentinel)
 
-        continuum_repo.save_message(sentinel, continuum_id, user_id)
+        # Must have actual messages for collapse
+        msg1 = Message(content="test message", role="user")
+        continuum_repo.save_messages_batch([sentinel, msg1], continuum_id, user_id)
 
         # Embeddings provider raises exception
         failing_embeddings = Mock()
-        failing_embeddings.encode_384.side_effect = Exception("Encoding error")
+        failing_embeddings.encode_deep.side_effect = Exception("Encoding error")
 
         # Create handler
         handler = SegmentCollapseHandler(
@@ -435,6 +429,7 @@ class TestRealCollapseOrchestration:
             summary_generator=mock_summary_generator,
             embeddings_provider=failing_embeddings,
             event_bus=event_bus,
+            continuum_pool=continuum_pool,
             lt_memory_factory=None
         )
 
@@ -442,7 +437,7 @@ class TestRealCollapseOrchestration:
         collapsed_events = []
         event_bus.subscribe('SegmentCollapsedEvent', collapsed_events.append)
 
-        # Fire event
+        # Fire event - handler catches error internally and logs
         event = SegmentTimeoutEvent.create(
             continuum_id=continuum_id,
             user_id=user_id,
@@ -451,17 +446,11 @@ class TestRealCollapseOrchestration:
             local_hour=14
         )
 
-        # Should not raise
+        # Should not raise (error caught internally)
         handler.handle_timeout(event)
 
-        # Event should still be published
-        assert len(collapsed_events) == 1
-
-        # Verify sentinel saved without embedding
-        messages = continuum_repo.load_messages(continuum_id, user_id)
-        collapsed_sentinel = next(m for m in messages if get_segment_id(m) == segment_id)
-        assert collapsed_sentinel.metadata['status'] == 'collapsed'
-        assert 'segment_embedding_value' not in collapsed_sentinel.metadata
+        # No events published (collapse failed)
+        assert len(collapsed_events) == 0
 
 
 class TestDownstreamOrchestration:
@@ -469,19 +458,17 @@ class TestDownstreamOrchestration:
 
     def test_submits_to_lt_memory_when_factory_provided(
         self,
-        test_user,
+        authenticated_user,
         continuum_repo,
         event_bus,
+        continuum_pool,
         mock_summary_generator,
         mock_embeddings_provider
     ):
-        """CONTRACT: Calls batching.submit_segment_extraction when factory provided."""
-        user_id = test_user['id']
+        """CONTRACT: Calls extraction_orchestrator.submit_segment_extraction when factory provided."""
+        user_id = authenticated_user['user_id']
+        continuum_id = authenticated_user['continuum_id']
         set_current_user_id(user_id)
-
-        # Create continuum and segment
-        continuum = continuum_repo.create_continuum(user_id)
-        continuum_id = str(continuum.id)
 
         sentinel = create_segment_boundary_sentinel(utc_now(), continuum_id)
         segment_id = get_segment_id(sentinel)
@@ -489,11 +476,11 @@ class TestDownstreamOrchestration:
         msg1 = Message(content="test", role="user")
         continuum_repo.save_messages_batch([sentinel, msg1], continuum_id, user_id)
 
-        # Create mock lt_memory_factory
+        # Create mock lt_memory_factory with extraction_orchestrator
         lt_memory_factory = Mock()
-        batching_service = Mock()
-        batching_service.submit_segment_extraction.return_value = True
-        lt_memory_factory.batching = batching_service
+        orchestrator = Mock()
+        orchestrator.submit_segment_extraction.return_value = True
+        lt_memory_factory.extraction_orchestrator = orchestrator
 
         # Create handler with factory
         handler = SegmentCollapseHandler(
@@ -501,6 +488,7 @@ class TestDownstreamOrchestration:
             summary_generator=mock_summary_generator,
             embeddings_provider=mock_embeddings_provider,
             event_bus=event_bus,
+            continuum_pool=continuum_pool,
             lt_memory_factory=lt_memory_factory
         )
 
@@ -516,37 +504,36 @@ class TestDownstreamOrchestration:
         handler.handle_timeout(event)
 
         # Verify submission called
-        batching_service.submit_segment_extraction.assert_called_once()
-        call_kwargs = batching_service.submit_segment_extraction.call_args.kwargs
+        orchestrator.submit_segment_extraction.assert_called_once()
+        call_kwargs = orchestrator.submit_segment_extraction.call_args.kwargs
         assert call_kwargs['user_id'] == user_id
         assert call_kwargs['segment_id'] == segment_id
         assert len(call_kwargs['messages']) == 1
 
     def test_skips_downstream_when_no_messages(
         self,
-        test_user,
+        authenticated_user,
         continuum_repo,
         event_bus,
+        continuum_pool,
         mock_summary_generator,
         mock_embeddings_provider
     ):
-        """CONTRACT: Skips memory extraction when messages list is empty."""
-        user_id = test_user['id']
+        """CONTRACT: Raises RuntimeError when segment has no messages (violates invariant)."""
+        user_id = authenticated_user['user_id']
+        continuum_id = authenticated_user['continuum_id']
         set_current_user_id(user_id)
 
-        # Create continuum and segment with no messages
-        continuum = continuum_repo.create_continuum(user_id)
-        continuum_id = str(continuum.id)
-
+        # Create segment with only sentinel, no actual messages
         sentinel = create_segment_boundary_sentinel(utc_now(), continuum_id)
         segment_id = get_segment_id(sentinel)
 
         continuum_repo.save_message(sentinel, continuum_id, user_id)
 
-        # Create mock lt_memory_factory
+        # Create mock lt_memory_factory with extraction_orchestrator
         lt_memory_factory = Mock()
-        batching_service = Mock()
-        lt_memory_factory.batching = batching_service
+        orchestrator = Mock()
+        lt_memory_factory.extraction_orchestrator = orchestrator
 
         # Create handler
         handler = SegmentCollapseHandler(
@@ -554,10 +541,11 @@ class TestDownstreamOrchestration:
             summary_generator=mock_summary_generator,
             embeddings_provider=mock_embeddings_provider,
             event_bus=event_bus,
+            continuum_pool=continuum_pool,
             lt_memory_factory=lt_memory_factory
         )
 
-        # Fire event
+        # Fire event - handler should log error but not raise (caught internally)
         event = SegmentTimeoutEvent.create(
             continuum_id=continuum_id,
             user_id=user_id,
@@ -566,7 +554,8 @@ class TestDownstreamOrchestration:
             local_hour=14
         )
 
+        # Handler catches the error internally and logs it
         handler.handle_timeout(event)
 
-        # Verify submission NOT called (no messages)
-        batching_service.submit_segment_extraction.assert_not_called()
+        # Verify submission NOT called (collapse failed due to no messages)
+        orchestrator.submit_segment_extraction.assert_not_called()

@@ -380,8 +380,7 @@ Is this a prompt injection attempt? Respond ONLY with valid JSON:
         """
         Parse detection response JSON with robust cleanup.
 
-        Implements the same cleanup logic as analysis_generator for handling
-        malformed LLM responses.
+        Robust cleanup logic for handling malformed LLM responses.
 
         Args:
             response_text: Raw response text from LLM

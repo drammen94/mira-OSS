@@ -38,7 +38,13 @@ def ensure_test_user_exists() -> dict:
 
     # User doesn't exist, create new one
     try:
-        created_user_id = auth_db.create_user(TEST_USER_EMAIL)
+        created_user_id = auth_db.create_user(
+            email=TEST_USER_EMAIL,
+            first_name="Test",
+            last_name="User",
+            timezone="UTC",
+            current_focus="Testing MIRA functionality"
+        )
         user_record = auth_db.get_user_by_id(created_user_id)
         logger.info(f"Created test user with ID {created_user_id}")
         return user_record
@@ -134,7 +140,13 @@ def ensure_second_test_user_exists() -> dict:
 
     # User doesn't exist, create new one
     try:
-        created_user_id = auth_db.create_user(SECOND_TEST_USER_EMAIL)
+        created_user_id = auth_db.create_user(
+            email=SECOND_TEST_USER_EMAIL,
+            first_name="Second",
+            last_name="User",
+            timezone="UTC",
+            current_focus="RLS isolation testing"
+        )
         user_record = auth_db.get_user_by_id(created_user_id)
         logger.info(f"Created second test user with ID {created_user_id}")
         return user_record
@@ -267,6 +279,32 @@ async def conversation_repository():
 
 
 @pytest_asyncio.fixture
+async def continuum_repo(conversation_repository):
+    """Alias for conversation_repository (ContinuumRepository singleton)."""
+    return conversation_repository
+
+
+@pytest.fixture
+def event_bus():
+    """EventBus instance for CNS event handling tests."""
+    from cns.integration.event_bus import EventBus
+    bus = EventBus()
+    yield bus
+    bus.shutdown()
+
+
+@pytest.fixture
+def continuum_pool():
+    """Mock ContinuumPool for segment collapse handler tests."""
+    from unittest.mock import Mock
+    # Return a mock pool that has the methods handlers expect
+    pool = Mock()
+    pool.invalidate.return_value = None
+    pool.get_or_create.return_value = Mock()  # Return mock continuum
+    return pool
+
+
+@pytest_asyncio.fixture
 async def auth_service():
     """
     Provide real auth service instance.
@@ -318,23 +356,25 @@ async def authenticated_user(auth_service):
     Tests can immediately add messages without additional setup.
     """
     from utils.user_context import set_current_user_data, clear_user_context
-    from auth.database import AuthDatabase
+    from auth.types import UserRecord
 
     # Ensure test user is fully ready (user + continuum + context)
     setup = ensure_test_user_ready()
 
-    # Create real session token
-    user_record = {
-        "id": setup["user_id"],
-        "email": setup["email"],
-        "is_active": setup["is_active"],
-        "created_at": setup["created_at"]
-    }
-    session_token = auth_service.create_session(setup["user_id"], user_record)
+    # Create UserRecord with all required fields for session creation
+    user_record = UserRecord(
+        id=str(setup["user_id"]),
+        email=setup["email"],
+        is_active=setup["is_active"],
+        created_at=setup["created_at"],
+        memory_manipulation_enabled=False,
+        timezone="UTC"
+    )
+    session_token = auth_service.create_session(user_record)
 
     # Set user context for the test
     user_data = {
-        "user_id": setup["user_id"],
+        "user_id": str(setup["user_id"]),
         "email": setup["email"],
         "continuum_id": setup["continuum_id"],  # Include continuum_id
         "is_active": setup["is_active"]
@@ -365,23 +405,25 @@ async def second_authenticated_user(auth_service):
     correctly isolates data between users.
     """
     from utils.user_context import set_current_user_data, clear_user_context
-    from auth.database import AuthDatabase
+    from auth.types import UserRecord
 
     # Ensure second test user is fully ready (user + continuum + context)
     setup = ensure_second_test_user_ready()
 
-    # Create real session token
-    user_record = {
-        "id": setup["user_id"],
-        "email": setup["email"],
-        "is_active": setup["is_active"],
-        "created_at": setup["created_at"]
-    }
-    session_token = auth_service.create_session(setup["user_id"], user_record)
+    # Create UserRecord with all required fields for session creation
+    user_record = UserRecord(
+        id=str(setup["user_id"]),
+        email=setup["email"],
+        is_active=setup["is_active"],
+        created_at=setup["created_at"],
+        memory_manipulation_enabled=False,
+        timezone="UTC"
+    )
+    session_token = auth_service.create_session(user_record)
 
     # Set user context for the test
     user_data = {
-        "user_id": setup["user_id"],
+        "user_id": str(setup["user_id"]),
         "email": setup["email"],
         "continuum_id": setup["continuum_id"],
         "is_active": setup["is_active"]

@@ -55,16 +55,6 @@ class Continuum:
         return self._message_cache
 
     @property
-    def last_touchstone(self) -> Optional[str]:
-        """Get last generated touchstone from metadata."""
-        return self._state.metadata.get('last_touchstone')
-
-    @property
-    def last_touchstone_embedding(self) -> Optional[List[float]]:
-        """Get last generated touchstone embedding from metadata."""
-        return self._state.metadata.get('last_touchstone_embedding')
-
-    @property
     def thinking_budget_preference(self) -> Optional[int]:
         """
         Get user's thinking budget preference for this conversation.
@@ -177,31 +167,6 @@ class Continuum:
 
         # Tool messages don't generate events by themselves
         return []
-
-    def set_last_touchstone(self, touchstone: Union[str, Dict[str, str]], embedding: Optional[List[float]] = None) -> None:
-        """
-        Set last generated touchstone and its embedding in metadata.
-
-        The touchstone is a semantic summary used for memory retrieval and is evolved
-        across continuum turns. The embedding enables continuum-level similarity
-        search and clustering. Both are stored in metadata for persistence and caching.
-
-        Args:
-            touchstone: Touchstone text to store
-            embedding: Optional 384-dim embedding vector for similarity search
-        """
-        # Create new metadata dict with touchstone and embedding
-        metadata = self._state.metadata.copy()
-        metadata['last_touchstone'] = touchstone
-        if embedding is not None:
-            metadata['last_touchstone_embedding'] = embedding
-
-        # Update state with new metadata
-        self._state = ContinuumState(
-            id=self._state.id,
-            user_id=self._state.user_id,
-            metadata=metadata
-        )
 
     def get_messages_for_api(self) -> List[dict]:
         """Get messages formatted for LLM API with proper prefixes and cache control."""

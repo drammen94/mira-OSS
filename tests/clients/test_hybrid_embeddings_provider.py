@@ -1,7 +1,7 @@
 """
 Tests for clients/hybrid_embeddings_provider.py
 
-Tests the hybrid provider that orchestrates AllMiniLM, OpenAI, and BGE reranker.
+Tests the hybrid provider using mdbr-leaf-ir-asym (768d) and BGE reranker.
 Following MIRA testing philosophy: no mocks, test real model behavior.
 """
 import pytest
@@ -36,16 +36,16 @@ def hybrid_provider_no_reranker():
 
 
 class TestHybridEmbeddingsProviderRealtimeEncoding:
-    """Test AllMiniLM fast encoding (384-dim)."""
+    """Test query encoding (768-dim)."""
 
-    def test_encode_realtime_single_string_returns_384_dim(self, hybrid_provider):
-        """Verify realtime encoding returns 384-dimensional embedding."""
+    def test_encode_realtime_single_string_returns_768_dim(self, hybrid_provider):
+        """Verify realtime encoding returns 768-dimensional embedding."""
         text = "This is a test sentence."
 
         embedding = hybrid_provider.encode_realtime(text)
 
-        # Should be 384-dim fp16
-        assert embedding.shape == (384,)
+        # Should be 768-dim fp16
+        assert embedding.shape == (768,)
         assert embedding.dtype == np.float16
 
     def test_encode_realtime_list_returns_2d_array(self, hybrid_provider):
@@ -54,9 +54,9 @@ class TestHybridEmbeddingsProviderRealtimeEncoding:
 
         embeddings = hybrid_provider.encode_realtime(texts)
 
-        # Should be 2D array (3, 384) with fp16
+        # Should be 2D array (3, 768) with fp16
         assert embeddings.ndim == 2
-        assert embeddings.shape == (3, 384)
+        assert embeddings.shape == (3, 768)
         assert embeddings.dtype == np.float16
 
     def test_encode_realtime_embeddings_are_normalized(self, hybrid_provider):
@@ -154,11 +154,11 @@ class TestHybridEmbeddingsProviderCaching:
         realtime_emb = hybrid_provider_with_cache.encode_realtime(text)
         deep_emb = hybrid_provider_with_cache.encode_deep(text)
 
-        # Should have different dimensions
-        assert realtime_emb.shape == (384,)
-        assert deep_emb.shape == (1024,)
-        # Should not be equal (different models)
-        assert not np.array_equal(realtime_emb[:384], deep_emb[:384])
+        # Both use same dimension (768d) but different encoding modes
+        assert realtime_emb.shape == (768,)
+        assert deep_emb.shape == (768,)
+        # Should not be exactly equal (query vs document encoding)
+        assert not np.array_equal(realtime_emb, deep_emb)
 
 
 class TestHybridEmbeddingsProviderReranking:
@@ -366,7 +366,7 @@ class TestEmbeddingCache:
         cache = EmbeddingCache(key_prefix="test")
 
         # If Valkey unavailable, operations should not crash
-        embedding = np.random.randn(384).astype(np.float16)
+        embedding = np.random.randn(768).astype(np.float16)
 
         # These should not raise exceptions
         cache.set("test text", embedding)
@@ -397,18 +397,18 @@ class TestEmbeddingCache:
 class TestHybridEmbeddingsProviderDimensionConsistency:
     """Test that models maintain their dimension contracts."""
 
-    def test_realtime_always_returns_384_dimensions(self, hybrid_provider):
-        """Verify realtime model consistently returns 384-dim."""
+    def test_realtime_always_returns_768_dimensions(self, hybrid_provider):
+        """Verify realtime model consistently returns 768-dim."""
         texts = ["Short", "Medium length text here", "Very long text " * 50]
 
         for text in texts:
             embedding = hybrid_provider.encode_realtime(text)
-            assert embedding.shape == (384,)
+            assert embedding.shape == (768,)
 
-    def test_deep_always_returns_1024_dimensions(self, hybrid_provider):
-        """Verify deep model consistently returns 1024-dim."""
+    def test_deep_always_returns_768_dimensions(self, hybrid_provider):
+        """Verify deep model consistently returns 768-dim."""
         texts = ["Short", "Medium length text here", "Very long text " * 50]
 
         for text in texts:
             embedding = hybrid_provider.encode_deep(text)
-            assert embedding.shape == (1024,)
+            assert embedding.shape == (768,)

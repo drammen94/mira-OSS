@@ -174,7 +174,7 @@ class TestMemoryCRUD:
         memories = [
             ExtractedMemory(text="Memory 1", importance_score=0.5, confidence=0.8),
         ]
-        embeddings = [[0.1] * 384]  # 384d AllMiniLM embedding
+        embeddings = [[0.1] * 768]  # 768d embedding
 
         memory_ids = db.store_memories(
             memories, embeddings=embeddings, user_id=test_user["user_id"]
@@ -185,7 +185,7 @@ class TestMemoryCRUD:
         # Verify embedding was stored
         retrieved = db.get_memory(memory_ids[0], user_id=test_user["user_id"])
         assert retrieved.embedding is not None
-        assert len(retrieved.embedding) == 384
+        assert len(retrieved.embedding) == 768
 
     def test_store_memories_embeddings_length_mismatch_raises_error(
         self, lt_memory_session_manager, test_user
@@ -197,7 +197,7 @@ class TestMemoryCRUD:
             ExtractedMemory(text="Memory 1", importance_score=0.5, confidence=0.8),
             ExtractedMemory(text="Memory 2", importance_score=0.6, confidence=0.9),
         ]
-        embeddings = [[0.1] * 384]  # Only 1 embedding for 2 memories
+        embeddings = [[0.1] * 768]  # Only 1 embedding for 2 memories
 
         with pytest.raises(ValueError, match=r"Embeddings length \(\d+\) must match memories length \(\d+\)"):
             db.store_memories(memories, embeddings=embeddings, user_id=test_user["user_id"])
@@ -452,11 +452,11 @@ class TestVectorSearch:
             ExtractedMemory(text="Test memory 1", importance_score=0.8, confidence=0.8),
             ExtractedMemory(text="Test memory 2", importance_score=0.7, confidence=0.8),
         ]
-        embeddings = [[0.1] * 384, [0.2] * 384]
+        embeddings = [[0.1] * 768, [0.2] * 768]
         db.store_memories(memories, embeddings=embeddings, user_id=test_user["user_id"])
 
         # Search with query embedding
-        query_embedding = [0.15] * 384
+        query_embedding = [0.15] * 768
         results = db.search_similar(
             query_embedding, limit=10, user_id=test_user["user_id"]
         )
@@ -503,13 +503,13 @@ class TestVectorSearch:
             ExtractedMemory(text="Low importance", importance_score=0.1, confidence=0.8),
             ExtractedMemory(text="High importance", importance_score=0.9, confidence=0.8),
         ]
-        embeddings = [[0.1] * 384, [0.2] * 384]
+        embeddings = [[0.1] * 768, [0.2] * 768]
         memory_ids = db.store_memories(
             memories, embeddings=embeddings, user_id=test_user["user_id"]
         )
 
         # Search with high min_importance filter
-        query_embedding = [0.15] * 384
+        query_embedding = [0.15] * 768
         results = db.search_similar(
             query_embedding,
             limit=10,
@@ -530,14 +530,14 @@ class TestVectorSearch:
         memories = [
             ExtractedMemory(text="Archived memory", importance_score=0.8, confidence=0.8),
         ]
-        embeddings = [[0.1] * 384]
+        embeddings = [[0.1] * 768]
         memory_ids = db.store_memories(
             memories, embeddings=embeddings, user_id=test_user["user_id"]
         )
         db.archive_memory(memory_ids[0], user_id=test_user["user_id"])
 
         # Search should not return archived memory
-        query_embedding = [0.1] * 384
+        query_embedding = [0.1] * 768
         results = db.search_similar(query_embedding, user_id=test_user["user_id"])
 
         assert all(not m.is_archived for m in results)

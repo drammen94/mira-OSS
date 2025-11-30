@@ -1,15 +1,18 @@
 """
-Hybrid embeddings provider that manages both fast and deep models.
+Hybrid embeddings provider using mdbr-leaf-ir-asym for asymmetric retrieval.
 
-This provider orchestrates AllMiniLM for real-time operations and OpenAI
-for advanced features, optimizing for both speed and quality.
+Architecture (bundled in mdbr-leaf-ir-asym):
+- Query encoding: mdbr-leaf-ir (23M params) - fast, lightweight
+- Document encoding: snowflake-arctic-embed-m-v1.5 - higher quality
+
+Methods:
+- encode_realtime(): Query encoding via model.encode_query() for fingerprints
+- encode_deep(): Document encoding via model.encode_document() for memories/summaries
 """
 import logging
 import hashlib
-from typing import List, Union, Optional, Tuple
+from typing import List, Union, Optional
 import numpy as np
-
-from clients.embeddings.sentence_transformers import get_all_minilm_model
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +33,10 @@ class EmbeddingCache:
         from clients.valkey_client import get_valkey_client
         self.valkey = get_valkey_client()  # Raises if Valkey unreachable
         self.logger.info(f"Embedding cache initialized with Valkey backend (prefix: {key_prefix})")
-    
+
     def _get_cache_key(self, text: str) -> str:
         return f"{self.key_prefix}:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
-    
+
     def get(self, text: str) -> Optional[np.ndarray]:
         """
         Get cached embedding.
@@ -44,11 +47,10 @@ class EmbeddingCache:
         cache_key = self._get_cache_key(text)
         cached_data = self.valkey.valkey_binary.get(cache_key)
         if cached_data:
-            # Cache stores fp16 data
             return np.frombuffer(cached_data, dtype=np.float16)
 
-        return None  # Cache miss (key not found)
-    
+        return None  # Cache miss
+
     def set(self, text: str, embedding: np.ndarray) -> None:
         """
         Cache embedding with 15-minute TTL.
@@ -56,319 +58,139 @@ class EmbeddingCache:
         Raises if Valkey operation fails.
         """
         cache_key = self._get_cache_key(text)
-        # Store as fp16 to save cache memory
         embedding_bytes = embedding.astype(np.float16).tobytes()
-        self.valkey.valkey_binary.setex(cache_key, 900, embedding_bytes)  # 15 minutes
+        self.valkey.valkey_binary.setex(cache_key, 900, embedding_bytes)
 
 
-def get_hybrid_embeddings_provider(cache_enabled: bool = True, enable_reranker: bool = True) -> 'HybridEmbeddingsProvider':
+def get_hybrid_embeddings_provider(cache_enabled: bool = True) -> 'HybridEmbeddingsProvider':
     """
     Get or create singleton HybridEmbeddingsProvider instance.
-    
+
     Args:
         cache_enabled: Whether to enable embedding caching
-        enable_reranker: Whether to enable BGE reranker for search refinement
-    
+
     Returns:
         Singleton HybridEmbeddingsProvider instance
     """
     global _hybrid_provider_instance
     if _hybrid_provider_instance is None:
         logger.info("Creating singleton HybridEmbeddingsProvider instance")
-        _hybrid_provider_instance = HybridEmbeddingsProvider(
-            cache_enabled=cache_enabled,
-            enable_reranker=enable_reranker
-        )
+        _hybrid_provider_instance = HybridEmbeddingsProvider(cache_enabled=cache_enabled)
     return _hybrid_provider_instance
 
 
 class HybridEmbeddingsProvider:
     """
-    Manages both fast (AllMiniLM) and deep (OpenAI) embedding models.
-    
-    Architecture:
-    - AllMiniLM (384-dim): Real-time operations (~1ms)
-    - OpenAI text-embedding-3-small (1024-dim): Advanced features
-    
-    Each model has its own cache to prevent dimension conflicts.
+    Manages asymmetric embeddings using mdbr-leaf-ir-asym (768-dim).
+
+    - encode_realtime(): Lightweight query encoding for fingerprints
+    - encode_deep(): Higher quality document encoding for memories/summaries
     """
-    
-    def __init__(self, cache_enabled: bool = True, enable_reranker: bool = True):
+
+    def __init__(self, cache_enabled: bool = True):
         """
-        Initialize the hybrid provider with both models.
+        Initialize the hybrid provider with mdbr-leaf-ir-asym model.
 
         Args:
             cache_enabled: Whether to enable embedding caching
-            enable_reranker: Whether to enable BGE reranker for search refinement
         """
         self.logger = logging.getLogger("hybrid_embeddings")
         self.cache_enabled = cache_enabled
-        self.enable_reranker = enable_reranker
 
-        # Load models based on configuration
         from config.config_manager import config
+        from sentence_transformers import SentenceTransformer
 
-        self.logger.info("Loading AllMiniLM model for real-time operations")
-        self.fast_model = get_all_minilm_model(
-            model_name=config.embeddings.fast_model.model_name,
-            cache_dir=config.embeddings.fast_model.cache_dir,
-            thread_limit=config.embeddings.fast_model.thread_limit
+        # Load mdbr-leaf-ir-asym for asymmetric retrieval
+        self.logger.info("Loading mdbr-leaf-ir-asym model for asymmetric retrieval")
+        self.model = SentenceTransformer(
+            "MongoDB/mdbr-leaf-ir-asym",
+            cache_folder=config.embeddings.fast_model.cache_dir
         )
 
-        # Initialize deep model only if enabled
-        self.deep_model = None
-        self.openai_embeddings_enabled = config.embeddings.openai_embeddings_enabled
-
-        if self.openai_embeddings_enabled:
-            self.logger.info("Loading OpenAI embeddings for deep understanding")
-            from clients.embeddings.openai_embeddings import OpenAIEmbeddingModel
-            # Use text-embedding-3-small which has 1024 dimensions, same as BGE-M3
-            self.deep_model = OpenAIEmbeddingModel(model="text-embedding-3-small")
-        else:
-            self.logger.info("OpenAI embeddings disabled - deep understanding features unavailable")
-
-        # Initialize separate caches for each model with different prefixes
+        # Initialize caches for query and document embeddings
         if cache_enabled:
-            self.fast_cache = EmbeddingCache(key_prefix="embedding_384")  # 384-dim cache
-            self.deep_cache = EmbeddingCache(key_prefix="embedding_1024") if self.deep_model else None
+            self.query_cache = EmbeddingCache(key_prefix="embedding_768_query")
+            self.doc_cache = EmbeddingCache(key_prefix="embedding_768_doc")
         else:
-            self.fast_cache = None
-            self.deep_cache = None
+            self.query_cache = None
+            self.doc_cache = None
 
-        # Initialize reranker if enabled (BGE reranker works independently of embedding model)
-        if enable_reranker:
-            self.logger.info("Loading BGE reranker for search refinement")
-            from clients.embeddings.bge_reranker import get_bge_reranker
-            self._reranker = get_bge_reranker(
-                model_name="BAAI/bge-reranker-base",
-                use_fp16=False,  # FP16 has compatibility issues with some ONNXRuntime versions
-                cache_dir=config.embeddings.deep_model.cache_dir,
-                thread_limit=config.embeddings.deep_model.thread_limit
-            )
-        else:
-            self._reranker = None
+        self.logger.info("HybridEmbeddingsProvider initialized")
 
-        deep_status = "OpenAI" if self.deep_model else "disabled"
-        self.logger.info(f"HybridEmbeddingsProvider initialized (deep: {deep_status}, reranker: {enable_reranker})")
-    
     def encode_realtime(self,
-                       texts: Union[str, List[str]],
-                       batch_size: Optional[int] = None) -> np.ndarray:
+                        texts: Union[str, List[str]],
+                        batch_size: Optional[int] = None) -> np.ndarray:
         """
-        Generate fast 384-dimensional embeddings for real-time operations.
-        
-        Used for:
-        - Tool relevance classification
-        - Memory search and proactive surfacing
-        - Workflow detection
-        - Memory storage
-        
+        Lightweight query encoding for fingerprints (768-dim).
+
+        Used for retrieval queries where speed matters.
+
         Args:
             texts: Text or list of texts to encode
             batch_size: Batch size for encoding
-            
+
         Returns:
-            384-dimensional normalized embeddings
+            768-dimensional normalized embeddings
         """
         if batch_size is None:
             from config.config_manager import config
             batch_size = config.embeddings.fast_model.batch_size
-        
+
         # Handle caching for single text
-        if self.cache_enabled and isinstance(texts, str) and self.fast_cache:
-            cached = self.fast_cache.get(texts)
+        if self.cache_enabled and isinstance(texts, str) and self.query_cache:
+            cached = self.query_cache.get(texts)
             if cached is not None:
                 return cached
-        
-        # Generate embeddings
-        embeddings = self.fast_model.encode(texts, batch_size=batch_size)
-        
-        # Convert to fp16 for memory efficiency
-        embeddings = embeddings.astype(np.float16)
-        
-        # Cache single embeddings
-        if self.cache_enabled and isinstance(texts, str) and self.fast_cache:
-            self.fast_cache.set(texts, embeddings)
-        
-        return embeddings
-    
-    def encode_deep(self,
-                   texts: Union[str, List[str]],
-                   batch_size: Optional[int] = None) -> np.ndarray:
-        """
-        Generate deep 1024-dimensional embeddings for advanced features.
 
-        Used for:
-        - Temporal RAG retrieval
-        - Conversational search
-        - Long-form content understanding
+        # Generate query embeddings (uses mdbr-leaf-ir internally)
+        embeddings = self.model.encode_query(texts, batch_size=batch_size)
+
+        embeddings = embeddings.astype(np.float16)
+
+        # Cache single embeddings
+        if self.cache_enabled and isinstance(texts, str) and self.query_cache:
+            self.query_cache.set(texts, embeddings)
+
+        return embeddings
+
+    def encode_deep(self,
+                    texts: Union[str, List[str]],
+                    batch_size: Optional[int] = None) -> np.ndarray:
+        """
+        Higher quality document encoding for memories and summaries (768-dim).
+
+        Used for storing memories and segment summaries where quality matters.
 
         Args:
             texts: Text or list of texts to encode
             batch_size: Batch size for encoding
 
         Returns:
-            1024-dimensional normalized embeddings
-
-        Raises:
-            RuntimeError: If OpenAI embeddings are not enabled
+            768-dimensional normalized embeddings
         """
-        if self.deep_model is None:
-            raise RuntimeError(
-                "OpenAI embeddings not available. Enable with "
-                "embeddings.openai_embeddings_enabled=true in config and ensure "
-                "openai_embeddings_key is set in Vault."
-            )
-
         if batch_size is None:
             from config.config_manager import config
-            batch_size = config.embeddings.deep_model.batch_size
+            batch_size = config.embeddings.fast_model.batch_size
 
         # Handle caching for single text
-        if self.cache_enabled and isinstance(texts, str) and self.deep_cache:
-            cached = self.deep_cache.get(texts)
+        if self.cache_enabled and isinstance(texts, str) and self.doc_cache:
+            cached = self.doc_cache.get(texts)
             if cached is not None:
                 return cached
 
-        # Generate embeddings
-        embeddings = self.deep_model.encode(texts, batch_size=batch_size)
+        # Generate document embeddings (uses snowflake-arctic-embed internally)
+        embeddings = self.model.encode_document(texts, batch_size=batch_size)
 
-        # Convert to fp16 for memory efficiency
         embeddings = embeddings.astype(np.float16)
 
         # Cache single embeddings
-        if self.cache_enabled and isinstance(texts, str) and self.deep_cache:
-            self.deep_cache.set(texts, embeddings)
+        if self.cache_enabled and isinstance(texts, str) and self.doc_cache:
+            self.doc_cache.set(texts, embeddings)
 
         return embeddings
-    
-    def rerank(self,
-               query: str,
-               passages: List[str],
-               top_k: int = 10) -> List[tuple]:
-        """
-        Rerank passages using BGE reranker for improved relevance scoring.
-        
-        Args:
-            query: Search query text
-            passages: List of passages to rerank
-            top_k: Number of top results to return
-            
-        Returns:
-            List of tuples (original_index, relevance_score, passage_text) 
-            sorted by relevance score in descending order
-            
-        Raises:
-            RuntimeError: If reranker is not enabled or available
-        """
-        if not self.enable_reranker or not self._reranker:
-            raise RuntimeError(
-                "Reranker not available. Initialize HybridEmbeddingsProvider "
-                "with enable_reranker=True to use reranking functionality."
-            )
-        
-        if not passages:
-            return []
-        
-        if query is None:
-            raise ValueError("Query cannot be None for reranking")
-        
-        try:
-            # Get reranked results with scores
-            scores_with_indices = self._reranker.rerank(
-                query, passages, return_scores=True
-            )
-            
-            # Take top_k results
-            top_results = scores_with_indices[:top_k]
-            
-            # Format as (index, score, passage) tuples
-            # Ensure native Python types (not numpy)
-            results = [
-                (int(idx), float(score), passages[idx])
-                for idx, score in top_results
-            ]
-            
-            return results
-            
-        except Exception as e:
-            self.logger.error(f"Reranking failed: {e}")
-            raise
-    
-    def search_and_rerank(self,
-                          query: str,
-                          passages: List[str],
-                          passage_embeddings: Optional[np.ndarray] = None,
-                          embedding_model: str = "fast",
-                          initial_top_k: int = 50,
-                          final_top_k: int = 10) -> List[Tuple[int, float, str]]:
-        """
-        Two-stage retrieval: fast embedding similarity search followed by neural reranking.
-        
-        Args:
-            query: Search query text
-            passages: List of passages to search through
-            passage_embeddings: Pre-computed embeddings (optional). If None, will compute them.
-            embedding_model: Which embedding model to use ("fast" for realtime, "deep" for quality)
-            initial_top_k: Number of candidates to retrieve in first stage
-            final_top_k: Number of results to return after reranking
-            
-        Returns:
-            List of tuples (original_index, rerank_score, passage_text) 
-            sorted by rerank score in descending order
-        """
-        try:
-            # Stage 1: Fast embedding-based similarity search
-            if embedding_model == "deep" and self.deep_model is None:
-                raise RuntimeError(
-                    "Deep embeddings requested but OpenAI embeddings not available. "
-                    "Enable with embeddings.openai_embeddings_enabled=true in config."
-                )
 
-            if passage_embeddings is None:
-                if embedding_model == "fast":
-                    passage_embeddings = self.encode_realtime(passages)
-                else:
-                    passage_embeddings = self.encode_deep(passages)
-
-            if embedding_model == "fast":
-                query_embedding = self.encode_realtime(query)
-            else:
-                query_embedding = self.encode_deep(query)
-            
-            # Compute cosine similarities
-            similarities = np.dot(passage_embeddings, query_embedding)
-            
-            # Get top candidates from embedding similarity
-            top_indices = np.argsort(similarities)[::-1][:initial_top_k]
-            top_passages = [passages[i] for i in top_indices]
-            
-            # Stage 2: Neural reranking (if available)
-            if self.enable_reranker and self._reranker:
-                reranked_results = self.rerank(query, top_passages, top_k=final_top_k)
-                # Convert local indices back to original indices
-                final_results = [
-                    (int(top_indices[local_idx]), score, passage)
-                    for local_idx, score, passage in reranked_results
-                ]
-                return final_results
-            else:
-                # Fallback: return top results based on embedding similarity
-                results = [
-                    (int(idx), float(similarities[idx]), passages[idx])
-                    for idx in top_indices[:final_top_k]
-                ]
-                return results
-                
-        except Exception as e:
-            self.logger.error(f"Search and rerank failed: {e}")
-            raise
-    
     def close(self):
-        """Clean up resources for models and reranker."""
-        self.fast_model.close()
-        if self.deep_model and hasattr(self.deep_model, 'close'):
-            self.deep_model.close()
-        if self._reranker:
-            self._reranker.close()
+        """Clean up resources."""
+        if hasattr(self.model, 'close'):
+            self.model.close()
         self.logger.info("HybridEmbeddingsProvider closed")

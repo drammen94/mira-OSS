@@ -91,7 +91,7 @@ def collapse_segment_sentinel(
         sentinel: Segment boundary sentinel message
         summary: Generated telegraphic summary
         display_title: Short telegraphic title for manifest display
-        embedding: AllMiniLM 384-dim embedding of summary
+        embedding: 768-dim embedding of summary
         inactive_duration_minutes: Minutes of inactivity that triggered collapse
         processing_failed: True if summary generation failed and fallback was used
         tools_used: Tools used in segment (extracted from messages)

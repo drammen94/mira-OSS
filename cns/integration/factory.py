@@ -52,7 +52,7 @@ class CNSIntegrationFactory:
         self._summary_generator = None
         self._session_cache_loader = None
         self._pointer_summary_coordinator = None
-        self._analysis_generator = None
+        self._fingerprint_generator = None
         
     def create_orchestrator(self) -> ContinuumOrchestrator:
         """
@@ -89,8 +89,8 @@ class CNSIntegrationFactory:
         # Create memory relevance service for surfacing memories
         memory_relevance_service = self._get_memory_relevance_service()
 
-        # Create analysis generator for pre-processing touchstone generation
-        analysis_generator = self._get_analysis_generator(tag_parser, llm_provider)
+        # Create fingerprint generator for retrieval query expansion
+        fingerprint_generator = self._get_fingerprint_generator(llm_provider)
 
         # Initialize session cache loader
         self._initialize_session_cache(continuum_repo, event_bus)
@@ -112,7 +112,7 @@ class CNSIntegrationFactory:
             working_memory=working_memory,
             tool_repo=tool_repo,
             tag_parser=tag_parser,
-            analysis_generator=analysis_generator,
+            fingerprint_generator=fingerprint_generator,
             memory_relevance_service=memory_relevance_service,
             event_bus=event_bus
         )
@@ -276,18 +276,17 @@ class CNSIntegrationFactory:
         return self._memory_relevance_service
         
     
-    def _get_analysis_generator(self, tag_parser: TagParser, llm_provider: LLMProvider):
-        """Get or create analysis generator instance."""
-        if self._analysis_generator is None:
-            logger.info("Initializing AnalysisGenerator")
-            from ..services.analysis_generator import AnalysisGenerator
-            self._analysis_generator = AnalysisGenerator(
+    def _get_fingerprint_generator(self, llm_provider: LLMProvider):
+        """Get or create fingerprint generator instance."""
+        if self._fingerprint_generator is None:
+            logger.info("Initializing FingerprintGenerator")
+            from ..services.fingerprint_generator import FingerprintGenerator
+            self._fingerprint_generator = FingerprintGenerator(
                 config=self.config.api,
-                tag_parser=tag_parser,
                 llm_provider=llm_provider
             )
-            logger.info("AnalysisGenerator initialized")
-        return self._analysis_generator
+            logger.info("FingerprintGenerator initialized")
+        return self._fingerprint_generator
 
     def _initialize_domain_knowledge_service(self, event_bus: EventBus):
         """

@@ -64,8 +64,8 @@ def embeddings_provider():
     """
     Provide real HybridEmbeddingsProvider for testing.
 
-    Returns the singleton instance with both fast (AllMiniLM) and deep (OpenAI)
-    models, plus BGE reranker for testing reranking functionality.
+    Returns the singleton instance with mdbr-leaf-ir-asym (768d) model,
+    plus BGE reranker for testing reranking functionality.
     """
     from clients.hybrid_embeddings_provider import get_hybrid_embeddings_provider
     return get_hybrid_embeddings_provider(cache_enabled=True, enable_reranker=True)

@@ -77,15 +77,15 @@ class TestToolDeduplication:
         sentinel = create_segment_boundary_sentinel(utc_now(), "cid")
 
         # Add same tool multiple times
-        add_tools_to_segment(sentinel, ["webaccess_tool"])
-        add_tools_to_segment(sentinel, ["webaccess_tool", "calendar_tool"])
-        add_tools_to_segment(sentinel, ["webaccess_tool"])
+        add_tools_to_segment(sentinel, ["web_tool"])
+        add_tools_to_segment(sentinel, ["web_tool", "calendar_tool"])
+        add_tools_to_segment(sentinel, ["web_tool"])
 
         tools = sentinel.metadata['tools_used']
         # No duplicates
         assert len(tools) == len(set(tools))
         # Both tools present exactly once
-        assert tools.count("webaccess_tool") == 1
+        assert tools.count("web_tool") == 1
         assert tools.count("calendar_tool") == 1
 
     def test_deduplicates_tools_within_single_call(self):
@@ -117,7 +117,7 @@ class TestEmbeddingHandling:
     def test_collapse_with_embedding_stores_embedding(self):
         """CONTRACT: Embedding is stored when provided."""
         sentinel = create_segment_boundary_sentinel(utc_now(), "cid")
-        embedding = [0.1] * 384
+        embedding = [0.1] * 768
 
         collapsed = collapse_segment_sentinel(sentinel, "summary", "Test title", embedding, 60)
 
@@ -232,9 +232,9 @@ class TestMissingMetadata:
         sentinel = create_segment_boundary_sentinel(utc_now(), "cid")
         del sentinel.metadata['tools_used']
 
-        add_tools_to_segment(sentinel, ["webaccess_tool"])
+        add_tools_to_segment(sentinel, ["web_tool"])
 
-        assert sentinel.metadata['tools_used'] == ["webaccess_tool"]
+        assert sentinel.metadata['tools_used'] == ["web_tool"]
 
 
 class TestRealWorkflow:
@@ -247,11 +247,11 @@ class TestRealWorkflow:
         assert is_active_segment(sentinel)
 
         # Add tools as conversation progresses
-        add_tools_to_segment(sentinel, ["webaccess_tool"])
+        add_tools_to_segment(sentinel, ["web_tool"])
         add_tools_to_segment(sentinel, ["reminder_tool"])
 
         # Segment times out and collapses (returns new Message)
-        embedding = [0.5] * 384
+        embedding = [0.5] * 768
         summary = "Web research and reminders"
         display_title = "Web research"
         collapsed = collapse_segment_sentinel(sentinel, summary, display_title, embedding, 60)
@@ -265,7 +265,7 @@ class TestRealWorkflow:
 
         # Verify final state
         assert collapsed.metadata['status'] == "collapsed"
-        assert collapsed.metadata['tools_used'] == ["reminder_tool", "webaccess_tool"]  # Sorted
+        assert collapsed.metadata['tools_used'] == ["reminder_tool", "web_tool"]  # Sorted
         assert collapsed.metadata['segment_embedding_value'] == embedding
         assert collapsed.metadata['memories_extracted'] is True
         assert collapsed.metadata['memory_count'] == 3
@@ -337,7 +337,7 @@ class TestComplexityScoring:
         """CONTRACT: Complexity score persists through complete segment lifecycle."""
         # Create and collapse with complexity
         sentinel = create_segment_boundary_sentinel(utc_now(), "cid")
-        embedding = [0.3] * 384
+        embedding = [0.3] * 768
 
         collapsed = collapse_segment_sentinel(
             sentinel,

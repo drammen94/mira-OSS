@@ -78,7 +78,7 @@ class TestSearchSummariesOperation:
                 "display_title": "Python async patterns discussion",
                 "summary": "Discussed Python async patterns including asyncio, await syntax, and concurrent.futures. Mark explained the event loop architecture.",
                 "tools_used": ["code_tool"],
-                "segment_embedding_value": [0.1] * 384  # Dummy embedding
+                "segment_embedding_value": [0.1] * 768  # Dummy embedding
             }
         )
         repo.save_message(sentinel1, continuum_id, user_id)
@@ -100,7 +100,7 @@ class TestSearchSummariesOperation:
                 "display_title": "Database migration planning",
                 "summary": "Planned PostgreSQL migration strategy. Discussed async patterns for batch processing.",
                 "tools_used": [],
-                "segment_embedding_value": [0.2] * 384  # Different dummy embedding
+                "segment_embedding_value": [0.2] * 768  # Different dummy embedding
             }
         )
         repo.save_message(sentinel2, continuum_id, user_id)
@@ -794,7 +794,7 @@ class TestSearchMemoriesOperation:
         ]
 
         # Create embeddings
-        embeddings = [np.random.rand(384).tolist() for _ in extracted_memories]
+        embeddings = [np.random.rand(768).tolist() for _ in extracted_memories]
 
         # Store memories
         memory_ids = memory_db.store_memories(extracted_memories, embeddings=embeddings, user_id=user_id)
@@ -1031,7 +1031,7 @@ class TestTemporalSearch:
                     "display_title": f"Segment {i} at offset {offset} days",
                     "summary": f"Content for temporal testing at {offset} days offset",
                     "tools_used": [],
-                    "segment_embedding_value": [0.1 * i] * 384
+                    "segment_embedding_value": [0.1 * i] * 768
                 }
             )
             repo.save_message(sentinel, continuum_id, user_id)
@@ -1170,7 +1170,7 @@ class TestEdgeCases:
                 "display_title": "Python async patterns discussion",
                 "summary": "Discussed Python async patterns including asyncio, await syntax, and concurrent.futures. Mark explained the event loop architecture.",
                 "tools_used": ["code_tool"],
-                "segment_embedding_value": [0.1] * 384
+                "segment_embedding_value": [0.1] * 768
             }
         )
         repo.save_message(sentinel1, continuum_id, user_id)

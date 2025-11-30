@@ -43,15 +43,14 @@ class ApiConfig(BaseModel):
     emergency_fallback_model: str = Field(default="qwen3:1.7b", description="Model to use during emergency fallback")
     emergency_fallback_recovery_minutes: int = Field(default=5, description="Minutes to wait before testing Anthropic recovery")
 
-    # Pre-processing analysis settings (subconscious reasoning layer)
-    analysis_enabled: bool = Field(default=True, description="Enable pre-processing analysis call for touchstone generation")
-    analysis_endpoint: str = Field(default="https://api.groq.com/openai/v1/chat/completions", description="OpenAI-compatible endpoint for analysis calls")
-    analysis_api_key_name: str = Field(default="groq_key", description="Vault key name for analysis API key")
-    analysis_model: str = Field(default="openai/gpt-oss-20b", description="Fast model for analysis generation")
-    analysis_max_tokens: int = Field(default=500, description="Maximum tokens for analysis response")
-    analysis_temperature: float = Field(default=1.0, description="Temperature for analysis generation")
-    analysis_timeout: int = Field(default=10, description="Timeout for analysis requests in seconds")
-    analysis_context_pairs: int = Field(default=5, description="Number of recent user/assistant turn pairs to include in analysis context")
+    # Fingerprint generation settings (query expansion for memory retrieval)
+    analysis_enabled: bool = Field(default=True, description="Enable fingerprint generation for retrieval")
+    analysis_endpoint: str = Field(default="https://api.groq.com/openai/v1/chat/completions", description="OpenAI-compatible endpoint for fingerprint generation")
+    analysis_api_key_name: str = Field(default="groq_key", description="Vault key name for fingerprint API key")
+    analysis_model: str = Field(default="openai/gpt-oss-20b", description="Fast model for fingerprint generation")
+    analysis_max_tokens: int = Field(default=500, description="Maximum tokens for fingerprint response")
+    analysis_temperature: float = Field(default=1.0, description="Temperature for fingerprint generation")
+    analysis_timeout: int = Field(default=10, description="Timeout for fingerprint requests in seconds")
 
 class ApiServerConfig(BaseModel):
     """FastAPI server configuration settings."""
@@ -95,7 +94,7 @@ class ToolConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="Whether tools are enabled")
     timeout: int = Field(default=30, description="Default timeout in seconds for tool operations")
-    essential_tools: List[str] = Field(default=["webaccess_tool", "reminder_tool", "invokeother_tool"], description="List of essential tools (warns if disabled)")
+    essential_tools: List[str] = Field(default=["web_tool", "reminder_tool", "invokeother_tool"], description="List of essential tools (warns if disabled)")
     invokeother_tool: InvokeOtherToolConfig = Field(default_factory=InvokeOtherToolConfig, description="Configuration for the invokeother_tool dynamic loader")
     # Synthetic data generator settings
     synthetic_data_analysis_model: str = Field(default="claude-3-7-sonnet-20250219", description="LLM model to use for code analysis and example review in synthetic data analysis")
@@ -103,12 +102,12 @@ class ToolConfig(BaseModel):
     # Synthetic data now uses unified BGE-M3 for deduplication
 
 class EmbeddingsFastModelConfig(BaseModel):
-    """Fast model configuration for real-time operations."""
-    
-    model_name: str = Field(default="sentence-transformers/all-MiniLM-L6-v2", description="AllMiniLM model for 384-dim real-time embeddings")
+    """Embedding model configuration."""
+
+    model_name: str = Field(default="MongoDB/mdbr-leaf-ir-asym", description="mdbr-leaf-ir-asym 768d asymmetric retrieval model")
     cache_dir: Optional[str] = Field(default=None, description="Cache directory for model files")
-    thread_limit: int = Field(default=2, description="Thread limit for fast inference")
-    batch_size: int = Field(default=32, description="Batch size for fast model")
+    thread_limit: int = Field(default=2, description="Thread limit for inference")
+    batch_size: int = Field(default=32, description="Batch size for encoding")
 
 class EmbeddingsDeepModelConfig(BaseModel):
     """Deep model configuration for advanced features."""
@@ -131,7 +130,7 @@ class EmbeddingsConfig(BaseModel):
     provider: str = Field(default="hybrid", description="Embeddings provider: 'hybrid' for dual-model system")
 
     # Model configurations
-    fast_model: EmbeddingsFastModelConfig = Field(default_factory=EmbeddingsFastModelConfig, description="Fast model configuration (AllMiniLM)")
+    fast_model: EmbeddingsFastModelConfig = Field(default_factory=EmbeddingsFastModelConfig, description="Embedding model configuration (mdbr-leaf-ir-asym)")
     deep_model: EmbeddingsDeepModelConfig = Field(default_factory=EmbeddingsDeepModelConfig, description="Deep model configuration (BGE-M3)")
     remote: EmbeddingsRemoteConfig = Field(default_factory=EmbeddingsRemoteConfig, description="Remote provider configuration (legacy)")
 
@@ -245,6 +244,10 @@ class BatchingConfig(BaseModel):
 
     Controls batch submission and processing behavior.
     """
+    api_key_name: str = Field(
+        default="anthropic_batch_key",
+        description="Vault key name for Anthropic Batch API (separate from chat to isolate rate limits and costs)"
+    )
     batch_expiry_hours: int = Field(
         default=24,
         description="Hours before Anthropic batch expires"
@@ -393,10 +396,10 @@ class ProactiveConfig(BaseModel):
     Controls memory surfacing behavior for CNS integration.
     """
     similarity_threshold: float = Field(
-        default=0.6,
+        default=0.265,
         ge=0.0,
         le=1.0,
-        description="Minimum similarity score for surfacing memories"
+        description="Minimum similarity score for surfacing memories (calibrated for mdbr-leaf-ir-asym)"
     )
     max_link_traversal_depth: int = Field(
         default=3,
