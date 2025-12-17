@@ -986,10 +986,10 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
     def _action_list(self, db) -> Dict[str, Any]:
         """List all domaindocs."""
         results = db.fetchall("SELECT * FROM domaindocs ORDER BY label")
-        domains = [db._decrypt_dict(row) for row in results]
+        domaindocs = [db._decrypt_dict(row) for row in results]
 
         return {
-            "domains": [
+            "domaindocs": [
                 {
                     "label": d["label"],
                     "description": d.get("encrypted__description", ""),
@@ -997,10 +997,10 @@ class DomainKnowledgeDomainHandler(BaseDomainHandler):
                     "created_at": d.get("created_at"),
                     "updated_at": d.get("updated_at")
                 }
-                for d in domains
+                for d in domaindocs
             ],
-            "count": len(domains),
-            "message": f"Found {len(domains)} domaindocs"
+            "count": len(domaindocs),
+            "message": f"Found {len(domaindocs)} domaindocs"
         }
 
     def _action_get(self, db, data: Dict[str, Any]) -> Dict[str, Any]:

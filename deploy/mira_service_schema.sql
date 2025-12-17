@@ -381,7 +381,6 @@ COMMENT ON INDEX idx_memories_embedding_ivfflat IS 'IVFFlat index for fast cosin
 CREATE OR REPLACE FUNCTION update_memories_search_vector() RETURNS trigger AS $$
 BEGIN
     NEW.search_vector := to_tsvector('english', NEW.text);
-    NEW.search_text := NEW.text;
     RETURN NEW;
 END
 $$ LANGUAGE plpgsql;
