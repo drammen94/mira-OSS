@@ -890,9 +890,10 @@ class ContinuumRepository:
         if rows and rows[0].get('turn_count'):
             return rows[0]['turn_count']
 
-        # First message in a new segment: no active segment exists yet.
-        # Return 1 now - the segment will be created with turn_count=1 inside
-        # save_message() later in this request. The values align.
+        # No active segment exists - create one now.
+        # This ensures find_active_segment() will succeed immediately after this call.
+        from utils.timezone_utils import utc_now
+        self._ensure_active_segment(UUID(str(continuum_id)), user_id, utc_now(), db)
         return 1
 
     def find_collapsed_segments(
