@@ -242,8 +242,3 @@ class GetContextTrinket(EventAwareTrinket):
                 target_trinket="GetContextTrinket",
                 context={"action": "segment_collapsed"}
             )
-
-    def cleanup(self) -> None:
-        """Clean up trinket resources."""
-        self.active_results.clear()
-        super().cleanup()

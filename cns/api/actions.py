@@ -1533,27 +1533,37 @@ class ContinuumDomainHandler(BaseDomainHandler):
     def execute_action(self, action: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Execute LLM tier actions."""
         if action == "get_llm_tier":
-            from utils.user_context import get_user_preferences, get_account_tiers
+            from utils.user_context import get_user_preferences, get_accessible_tiers
 
             prefs = get_user_preferences()
-            tiers = get_account_tiers()
+            accessible = get_accessible_tiers(prefs.max_tier)
             return {
                 "success": True,
                 "tier": prefs.llm_tier,
+                "max_tier": prefs.max_tier,
                 "available_tiers": [
                     {"name": t.name, "description": t.description}
-                    for t in tiers.values()
+                    for t in accessible
                 ]
             }
 
         elif action == "set_llm_tier":
-            from utils.user_context import update_user_preference, get_account_tiers
+            from utils.user_context import (
+                update_user_preference, get_account_tiers,
+                can_access_tier, get_user_preferences
+            )
 
             tier = data.get("tier")
             tiers = get_account_tiers()
             if tier not in tiers:
                 raise ValidationError(
                     f"Invalid tier. Must be one of: {list(tiers.keys())}"
+                )
+
+            prefs = get_user_preferences()
+            if not can_access_tier(tier, prefs.max_tier):
+                raise ValidationError(
+                    f"Tier '{tier}' not available. Your account has access up to '{prefs.max_tier}'."
                 )
 
             update_user_preference('llm_tier', tier)

@@ -107,15 +107,6 @@ def set_tier(token: str, tier: str) -> bool:
     return resp.get("success", False)
 
 
-def get_enabled_domaindocs(token: str) -> list[str]:
-    """Get list of enabled domaindoc labels."""
-    resp = call_action(token, "domain_knowledge", "list", {})
-    if resp.get("success"):
-        data = resp.get("data", {})
-        return [d["label"] for d in data.get("domaindocs", []) if d.get("enabled")]
-    return []
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Server
 # ─────────────────────────────────────────────────────────────────────────────
@@ -261,18 +252,14 @@ def render_mira_message(text: str, is_error: bool = False) -> None:
     console.print(panel)
 
 
-def render_status_bar(tier: str, enabled_docs: list[str] = None) -> None:
-    """Render status bar with tier (always shown) and enabled domaindocs."""
-    # Always show tier in magenta (matches MIRA response color)
-    left_parts = [Text(f" {TIER_DESCRIPTIONS.get(tier, tier)}", style="magenta")]
+def render_status_bar(tier: str) -> None:
+    """Render the status bar. Shows tier description if not balanced."""
+    # Build left side - only show non-balanced tier
+    left_text = ""
+    if tier != "balanced":
+        left_text = TIER_DESCRIPTIONS.get(tier, tier)
 
-    # Add enabled domaindocs pipe-separated in bright yellow
-    if enabled_docs:
-        for doc in enabled_docs:
-            left_parts.append(Text(" | ", style="dim"))
-            left_parts.append(Text(doc, style="bright_yellow"))
-
-    left = Text.assemble(*left_parts)
+    left = Text(f" {left_text}" if left_text else "", style="cyan")
     right = Text("/help • ctrl+c quit", style="dim")
 
     padding = console.width - len(left.plain) - len(right.plain)
@@ -284,8 +271,7 @@ def render_screen(
     history: list[tuple[str, str]],
     tier: str,
     pending_user_msg: str = None,
-    show_thinking: bool = False,
-    enabled_docs: list[str] = None
+    show_thinking: bool = False
 ) -> None:
     """Clear and render the full screen with status bar always at bottom."""
     clear_screen_and_scrollback()
@@ -321,7 +307,7 @@ def render_screen(
         console.print()
 
     # Status bar always last
-    render_status_bar(tier, enabled_docs)
+    render_status_bar(tier)
 
 
 class ThinkingAnimation:
@@ -389,19 +375,18 @@ def render_thinking() -> None:
 def chat_loop(token: str) -> None:
     history: list[tuple[str, str]] = []
     current_tier = get_tier(token)
-    enabled_docs = get_enabled_domaindocs(token)
 
     # Mutable state for resize handler (closures capture by reference for mutables)
-    prefs = {'tier': current_tier, 'docs': enabled_docs}
+    prefs = {'tier': current_tier}
 
     def handle_resize(signum, frame):
-        render_screen(history, prefs['tier'], enabled_docs=prefs['docs'])
+        render_screen(history, prefs['tier'])
 
     # SIGWINCH is Unix-only (terminal window resize)
     if hasattr(signal, 'SIGWINCH'):
         signal.signal(signal.SIGWINCH, handle_resize)
 
-    render_screen(history, current_tier, enabled_docs=enabled_docs)
+    render_screen(history, current_tier)
 
     while True:
         try:
@@ -425,7 +410,7 @@ def chat_loop(token: str) -> None:
 
             if cmd == "help":
                 console.print()
-                render_mira_message("/tier [fast|balanced|nuanced]\n/domaindoc list|create|enable|disable\n/status\n/clear\nquit, exit, bye")
+                render_mira_message("/tier [fast|balanced|nuanced]\n/status\n/clear\nquit, exit, bye")
                 console.print()
 
             elif cmd == "status":
@@ -440,7 +425,7 @@ def chat_loop(token: str) -> None:
                 if arg and arg in TIER_OPTIONS:
                     if set_tier(token, arg):
                         current_tier = prefs['tier'] = arg
-                        render_screen(history, current_tier, enabled_docs=enabled_docs)
+                        render_screen(history, current_tier)
                     else:
                         console.print()
                         render_mira_message("Failed to set tier", is_error=True)
@@ -458,103 +443,7 @@ def chat_loop(token: str) -> None:
 
             elif cmd == "clear":
                 history.clear()
-                render_screen(history, current_tier, enabled_docs=enabled_docs)
-
-            elif cmd == "domaindoc":
-                # Get original (non-lowercased) arg for create description
-                raw_arg = parts[1] if len(parts) > 1 else None
-
-                if not arg:
-                    console.print()
-                    render_mira_message("/domaindoc list\n/domaindoc create <label> \"<description>\"\n/domaindoc enable <label>\n/domaindoc disable <label>")
-                    console.print()
-
-                elif arg == "list":
-                    resp = call_action(token, "domain_knowledge", "list", {})
-                    if resp.get("success"):
-                        data = resp.get("data", {})
-                        docs = data.get("domaindocs", [])
-                        if docs:
-                            lines = []
-                            for d in docs:
-                                status = "✓" if d.get("enabled") else "○"
-                                lines.append(f"{status} {d['label']}: {d.get('description', '')}")
-                            console.print()
-                            render_mira_message("\n".join(lines))
-                            console.print()
-                        else:
-                            console.print()
-                            render_mira_message("No domaindocs found. Create one with /domaindoc create <label> \"<description>\"")
-                            console.print()
-                    else:
-                        console.print()
-                        render_mira_message(f"Error: {resp.get('error', {}).get('message', 'Unknown')}", is_error=True)
-                        console.print()
-
-                elif arg.startswith("create "):
-                    # Parse: create label "description"
-                    import shlex
-                    try:
-                        create_parts = shlex.split(raw_arg[7:])  # Skip "create "
-                        if len(create_parts) >= 2:
-                            label = create_parts[0]
-                            description = create_parts[1]
-                            resp = call_action(token, "domain_knowledge", "create", {"label": label, "description": description})
-                            if resp.get("success"):
-                                console.print()
-                                render_mira_message(f"Created domaindoc '{label}'")
-                                console.print()
-                            else:
-                                console.print()
-                                render_mira_message(f"Error: {resp.get('error', {}).get('message', 'Unknown')}", is_error=True)
-                                console.print()
-                        else:
-                            console.print()
-                            render_mira_message("Usage: /domaindoc create <label> \"<description>\"", is_error=True)
-                            console.print()
-                    except ValueError as e:
-                        console.print()
-                        render_mira_message(f"Error parsing command: {e}", is_error=True)
-                        console.print()
-
-                elif arg == "enable" or arg.startswith("enable "):
-                    label = arg[7:].strip() if arg.startswith("enable ") else ""
-                    if not label:
-                        console.print()
-                        render_mira_message("Usage: /domaindoc enable <label>", is_error=True)
-                        console.print()
-                    else:
-                        resp = call_action(token, "domain_knowledge", "enable", {"label": label})
-                        if resp.get("success"):
-                            enabled_docs = get_enabled_domaindocs(token)
-                            prefs['docs'] = enabled_docs
-                            render_screen(history, current_tier, enabled_docs=enabled_docs)
-                        else:
-                            console.print()
-                            render_mira_message(f"Error: {resp.get('error', {}).get('message', 'Unknown')}", is_error=True)
-                            console.print()
-
-                elif arg == "disable" or arg.startswith("disable "):
-                    label = arg[8:].strip() if arg.startswith("disable ") else ""
-                    if not label:
-                        console.print()
-                        render_mira_message("Usage: /domaindoc disable <label>", is_error=True)
-                        console.print()
-                        continue
-                    resp = call_action(token, "domain_knowledge", "disable", {"label": label})
-                    if resp.get("success"):
-                        enabled_docs = get_enabled_domaindocs(token)
-                        prefs['docs'] = enabled_docs
-                        render_screen(history, current_tier, enabled_docs=enabled_docs)
-                    else:
-                        console.print()
-                        render_mira_message(f"Error: {resp.get('error', {}).get('message', 'Unknown')}", is_error=True)
-                        console.print()
-
-                else:
-                    console.print()
-                    render_mira_message(f"Unknown domaindoc command: {arg}\nTry: /domaindoc list, create, enable, disable", is_error=True)
-                    console.print()
+                render_screen(history, current_tier)
 
             else:
                 console.print()
@@ -566,7 +455,7 @@ def chat_loop(token: str) -> None:
         # Regular message - show thinking animation
         # Note: Don't use show_thinking=True here - the animation handles its own rendering
         # Using both creates duplicate indicators (one static above status bar, one animated below)
-        render_screen(history, current_tier, pending_user_msg=user_input, show_thinking=False, enabled_docs=enabled_docs)
+        render_screen(history, current_tier, pending_user_msg=user_input, show_thinking=False)
         _thinking_animation.start()
 
         result = send_message(token, user_input)
@@ -579,7 +468,7 @@ def chat_loop(token: str) -> None:
             error = result.get("error", {}).get("message", "Unknown error")
             history.append((user_input, f"Error: {error}"))
 
-        render_screen(history, current_tier, enabled_docs=enabled_docs)
+        render_screen(history, current_tier)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

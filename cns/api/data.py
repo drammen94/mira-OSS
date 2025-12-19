@@ -293,71 +293,24 @@ class DataEndpoint(BaseHandler):
         }
 
     def _get_working_memory(self, **params) -> Dict[str, Any]:
-        """Get current working memory trinket states from Valkey.
+        """Get current working memory trinket states.
 
         If 'section' param provided, returns only that trinket's content.
         Otherwise returns all trinkets.
         """
+        from cns.services.orchestrator import get_orchestrator
+
+        orchestrator = get_orchestrator()
+        working_memory = orchestrator.working_memory
+
         section_filter = params.get('section')
-
         if section_filter:
-            return self._get_trinket_section(section_filter)
+            state = working_memory.get_trinket_state(section_filter)
+            if state is None:
+                raise NotFoundError("trinket", section_filter)
+            return state
 
-        # All sections: get keys and query each
-        return self._get_all_trinket_sections()
-
-    def _get_trinket_section(self, section_name: str) -> Dict[str, Any]:
-        """Get a single trinket section from Valkey."""
-        from clients.valkey_client import get_valkey_client
-        from working_memory.trinkets.base import TRINKET_KEY_PREFIX
-        import json
-
-        user_id = get_current_user_id()
-        hash_key = f"{TRINKET_KEY_PREFIX}:{user_id}"
-
-        valkey = get_valkey_client()
-        json_value = valkey.hget_with_retry(hash_key, section_name)
-
-        if json_value is None:
-            raise NotFoundError("trinket", section_name)
-
-        try:
-            data = json.loads(json_value)
-            return {
-                "section_name": section_name,
-                "content": data.get("content", ""),
-                "cache_policy": data.get("cache_policy", False),
-                "last_updated": data.get("updated_at")
-            }
-        except json.JSONDecodeError:
-            raise ValidationError(f"Invalid cached data for section: {section_name}")
-
-    def _get_all_trinket_sections(self) -> Dict[str, Any]:
-        """Get all trinket sections by querying each one."""
-        from clients.valkey_client import get_valkey_client
-        from working_memory.trinkets.base import TRINKET_KEY_PREFIX
-
-        user_id = get_current_user_id()
-        hash_key = f"{TRINKET_KEY_PREFIX}:{user_id}"
-
-        valkey = get_valkey_client()
-        section_names = valkey._client.hkeys(hash_key)
-
-        trinkets = []
-        for section_name in section_names:
-            try:
-                trinkets.append(self._get_trinket_section(section_name))
-            except (NotFoundError, ValidationError) as e:
-                logger.warning(f"Skipping invalid trinket section {section_name}: {e}")
-                continue
-
-        return {
-            "trinkets": trinkets,
-            "meta": {
-                "trinket_count": len(trinkets),
-                "loaded_at": format_utc_iso(utc_now())
-            }
-        }
+        return working_memory.get_all_trinket_states()
 
 
 def get_data_handler() -> DataEndpoint:

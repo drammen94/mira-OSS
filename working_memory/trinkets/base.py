@@ -133,11 +133,3 @@ class EventAwareTrinket:
             Generated content string or empty string if no content
         """
         raise NotImplementedError("Subclasses must implement generate_content()")
-    
-    def cleanup(self) -> None:
-        """
-        Clean up trinket resources.
-        
-        Subclasses can override this to perform specific cleanup.
-        """
-        logger.debug(f"{self.__class__.__name__} cleaned up")

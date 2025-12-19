@@ -14,7 +14,7 @@
 -- 6. Hub score: f(inbound_links) with diminishing returns after 10 links
 -- 7. Entity hub score: f(entity_links × entity.link_count × type_weight) with diminishing returns
 -- 8. Mention score: f(mention_count) - explicit LLM references (strongest signal)
--- 9. Newness boost: 2.0 decaying to 0 over 60 activity days (grace period for new memories)
+-- 9. Newness boost: 2.0 decaying to 0 over 15 activity days (grace period for new memories)
 -- 10. Raw score: value_score + hub_score + entity_hub_score + mention_score + newness_boost
 -- 11. Recency boost: 1.0 / (1.0 + activity_days_since_last_access * 0.015)
 -- 12. Temporal multiplier: happens_at proximity boost (calendar-based)
@@ -26,7 +26,7 @@
 -- - MIN_AGE_DAYS = 7 (prevents spikes for new memories)
 -- - SIGMOID_CENTER = 2.0 (maps average memories to ~0.5 importance)
 -- - EXPIRATION_TRAILOFF_DAYS = 5 (grace period after expires_at)
--- - NEWNESS_BOOST_DECAY_DAYS = 60 (grace period for new memories)
+-- - NEWNESS_BOOST_DECAY_DAYS = 15 (grace period for new memories)
 -- - RECENCY_DECAY_RATE = 0.015 (half-life of ~67 activity days)
 -- - TEMPORAL_DECAY_DAYS = 45 (window for past-event decay)
 -- - TEMPORAL_FLOOR = 0.4 (minimum multiplier for past events)
@@ -125,11 +125,11 @@ ROUND(CAST(
                         END
                     ) +
 
-                    -- NEWNESS BOOST: grace period for new memories (decays over 60 activity days)
+                    -- NEWNESS BOOST: grace period for new memories (decays over 15 activity days)
                     -- Gives memories time to accumulate behavioral signals before being penalized
                     GREATEST(0.0, 2.0 - (
                         GREATEST(0, u.cumulative_activity_days - COALESCE(m.activity_days_at_creation, 0))
-                        * 0.033  -- 2.0 / 60 = 0.033, fully decays over 60 activity days
+                        * 0.133  -- 2.0 / 15 = 0.133, fully decays over 15 activity days
                     ))
                 ) *
 

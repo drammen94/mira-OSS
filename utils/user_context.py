@@ -114,6 +114,7 @@ class TierConfig:
     model: str
     thinking_budget: int
     description: str
+    display_order: int
 
 
 # Module-level cache for tiers (loaded once per process)
@@ -133,7 +134,7 @@ def get_account_tiers() -> dict[str, TierConfig]:
     db = PostgresClient('mira_service')
 
     results = db.execute_query(
-        "SELECT name, model, thinking_budget, description FROM account_tiers ORDER BY display_order"
+        "SELECT name, model, thinking_budget, description, display_order FROM account_tiers ORDER BY display_order"
     )
 
     _tiers_cache = {
@@ -141,7 +142,8 @@ def get_account_tiers() -> dict[str, TierConfig]:
             name=row['name'],
             model=row['model'],
             thinking_budget=row['thinking_budget'],
-            description=row['description'] or ''
+            description=row['description'] or '',
+            display_order=row['display_order']
         )
         for row in results
     }
@@ -156,6 +158,19 @@ def resolve_tier(tier_name: str) -> TierConfig:
     return tiers[tier_name]
 
 
+def get_accessible_tiers(max_tier: str) -> list[TierConfig]:
+    """Get all tiers accessible up to and including max_tier."""
+    tiers = get_account_tiers()
+    max_order = tiers[max_tier].display_order
+    return [t for t in tiers.values() if t.display_order <= max_order]
+
+
+def can_access_tier(requested_tier: str, max_tier: str) -> bool:
+    """Check if requested tier is within user's allowed access."""
+    tiers = get_account_tiers()
+    return tiers[requested_tier].display_order <= tiers[max_tier].display_order
+
+
 # ============================================================
 # UserPreferences - Database-backed user settings
 # ============================================================
@@ -168,6 +183,7 @@ class UserPreferences(BaseModel):
     timezone: str = Field(default="America/Chicago")
     memory_manipulation_enabled: bool = Field(default=True)
     llm_tier: str = Field(default="balanced")
+    max_tier: str = Field(default="balanced")
 
 
 def get_user_preferences() -> UserPreferences:
@@ -187,7 +203,7 @@ def get_user_preferences() -> UserPreferences:
     db = PostgresClient('mira_service')
 
     result = db.execute_single(
-        """SELECT timezone, memory_manipulation_enabled, llm_tier
+        """SELECT timezone, memory_manipulation_enabled, llm_tier, max_tier
            FROM users WHERE id = %s""",
         (user_id,)
     )
@@ -196,6 +212,7 @@ def get_user_preferences() -> UserPreferences:
         timezone=result.get('timezone') or 'America/Chicago',
         memory_manipulation_enabled=result.get('memory_manipulation_enabled', True),
         llm_tier=result.get('llm_tier') or 'balanced',
+        max_tier=result.get('max_tier') or 'balanced',
     )
 
     update_current_user({'_preferences': prefs})

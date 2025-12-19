@@ -82,25 +82,7 @@ class SystemPromptComposer:
         self._sections[name] = content
         self._cache_policies[name] = cache_policy
         logger.debug(f"Added section '{name}' ({len(content)} chars, cache={cache_policy})")
-    
-    def remove_section(self, name: str) -> bool:
-        """
-        Remove a section from the composer.
-        
-        Args:
-            name: Section name to remove
-            
-        Returns:
-            True if section was removed, False if not found
-        """
-        if name in self._sections:
-            del self._sections[name]
-            logger.debug(f"Removed section '{name}'")
-            return True
-        return False
-        
-    ## @CLAUDE: Only mentioned once. Dead code?
-    
+
     def clear_sections(self, preserve_base: bool = True) -> None:
         """
         Clear all sections.
@@ -177,39 +159,3 @@ class SystemPromptComposer:
         # Replace 3+ newlines with exactly 2 newlines
         content = re.sub(r'\n{3,}', '\n\n', content)
         return content.strip()
-    
-    def get_sections(self) -> Dict[str, str]:
-        """
-        Get all current sections.
-        
-        Returns:
-            Dictionary of section names to content
-        """
-        return self._sections.copy()
-        
-    ## @CLAUDE: This is also only referenced once and its in a testfile
-    
-    def get_section_names(self) -> List[str]:
-        """
-        Get names of all current sections.
-        
-        Returns:
-            List of section names currently in composer
-        """
-        return list(self._sections.keys())
-        
-    ## @CLAUDE: Also maybe dead code
-    
-    def has_section(self, name: str) -> bool:
-        """
-        Check if a section exists.
-        
-        Args:
-            name: Section name to check
-            
-        Returns:
-            True if section exists
-        """
-        return name in self._sections
-
-    ## @CLAUDE: Also maybe dead code. idk.

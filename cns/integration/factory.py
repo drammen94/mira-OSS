@@ -401,20 +401,6 @@ class CNSIntegrationFactory:
 
         logger.info("Manifest query service initialized and subscribed to ManifestUpdatedEvent")
 
-    def cleanup(self):
-        """Clean up all initialized services."""
-        logger.info("Cleaning up CNS integration factory")
-
-        if self._working_memory:
-            self._working_memory.cleanup_all_managers()
-
-        # Pointer summary coordinator cleanup disabled while using APScheduler
-        # if self._pointer_summary_coordinator:
-        #     self._pointer_summary_coordinator.cleanup()
-
-        logger.info("CNS integration factory cleanup complete")
-
-
 
 def create_cns_orchestrator(config_instance = None) -> ContinuumOrchestrator:
     """

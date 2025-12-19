@@ -28,52 +28,151 @@ Every tool needs these core patterns:
 
 | Pattern | Where to Find | What It Shows |
 |---------|---------------|---------------|
-| **Tool Structure** | reminder_tool.py:38-96 | Required metadata (name, descriptions, schema) |
-| **Configuration** | weather_tool.py:48-104 | Pydantic config with Field descriptions, multiple options |
-| | reminder_tool.py:38-63 | Simpler config example |
-| **Initialization** | reminder_tool.py:179-233 | Deferred table creation with has_user_context() check |
-| | contacts_tool.py:127-150 | Another initialization example |
-| **Database Schema** | reminder_tool.py:199-233 | Tables with encrypted__ fields, proper indexes |
-| | contacts_tool.py:132-150 | Schema with foreign keys |
-| **Operation Routing** | reminder_tool.py:303-335 | JSON kwargs parsing, operation dispatch, error handling |
-| | contacts_tool.py:152-199 | Clean operation routing pattern |
-| **Input Validation** | weather_tool.py:211-456 | Collecting all errors before raising, specific messages |
-| | reminder_tool.py:362-390 | Required field validation |
-| **CRUD Operations** | contacts_tool.py:201-579 | Complete CRUD with UUID generation, encryption |
-| | reminder_tool.py:337-582 | CRUD with cross-tool linking |
-| **Timezone Handling** | reminder_tool.py:849-917 | UTC storage, natural language parsing, display conversion |
-| | punchclock_tool.py:180-250 | Timezone conversion for display |
-| **Encryption** | contacts_tool.py:201-260 | encrypted__ prefix for automatic encryption/decryption |
-| | reminder_tool.py:362-430 | Encrypted fields in database operations |
-| **Search & Scoring** | contacts_tool.py:314-400 | Score-based fuzzy matching with relevance |
-| | kasa_tool.py:1234-1401 | Device name matching with similarity scoring |
-| **File Operations** | weather_tool.py:107-200 | Cache file management, TTL checking |
-| | kasa_tool.py:1214-1232 | JSON file read/write for config |
-| **Response Formatting** | reminder_tool.py:805-847 | Consistent {"success": bool, ...} format with display data |
-| | contacts_tool.py:580-650 | Formatting with linked entity data |
-| **Error Handling** | reminder_tool.py:584-614 | Helpful errors with available options |
-| | weather_tool.py:211-280 | Validation with collected error messages |
+| **Tool Base Class** | tools/repo.py:40-143 | Base Tool class, properties, abstract methods |
+| **Tool Metadata** | reminder_tool.py:38-112 | name, simple_description, anthropic_schema |
+| **Configuration** | reminder_tool.py:29-35 | Pydantic config with registry.register() |
+| | contacts_tool.py:28-41 | Config with Field descriptions |
+| **Deferred Initialization** | reminder_tool.py:114-145 | has_user_context() check, table creation |
+| **Database Schema** | reminder_tool.py:124-145 | Tables with encrypted__ fields, indexes |
+| | contacts_tool.py:264-279 | Schema with UUID primary keys |
+| **Operation Routing** | reminder_tool.py:179-252 | JSON kwargs parsing, operation dispatch |
+| | contacts_tool.py:173-220 | Clean operation routing pattern |
+| **Input Validation** | contacts_tool.py:242-258 | Validation with clear error messages |
+| | reminder_tool.py:282-294 | Required field validation |
+| **CRUD Operations** | contacts_tool.py:222-298 | Complete CRUD with UUID generation |
+| | reminder_tool.py:254-354 | CRUD with cross-tool linking |
+| **Timezone Handling** | reminder_tool.py:788-852 | Natural language parsing, UTC storage |
+| | reminder_tool.py:335-338 | Display conversion to user timezone |
+| **Encryption** | contacts_tool.py:264-279 | encrypted__ prefix for automatic encryption |
+| | userdata_manager.py:298-330 | How encryption/decryption works internally |
+| **Fuzzy Name Matching** | contacts_tool.py:115-171 | Score-based matching with ambiguity handling |
+| **File Operations** | tools/repo.py:118-130 | make_dir, get_file_path, open_file, file_exists |
+| **Response Formatting** | reminder_tool.py:340-354 | Consistent response format with message |
+| | contacts_tool.py:282-298 | Formatted responses with success flag |
+| **Error Handling** | reminder_tool.py:501-531 | Helpful errors with available options |
+| | contacts_tool.py:363-374 | Error responses with suggestions |
 
 ### Specialized Patterns
 
 For advanced functionality, reference these specific implementations:
 
-| Pattern | Tool | Lines | When You Need It |
-|---------|------|-------|------------------|
-| **Async Operations** | kasa_tool.py | 567-622 | Async device discovery, network calls |
-| **API Retry Logic** | http_client.py (utils/) | 61-130 | Exponential backoff, retry mixin |
-| **Fuzzy Name Matching** | contacts_tool.py | 314-400 | Scoring partial matches, handling ambiguity |
-| | kasa_tool.py | 1234-1401 | Device name matching with suggestions |
-| **Working Memory Integration** | punchclock_tool.py | 600-610 | Publishing trinket updates, UI refresh |
-| **Complex API Caching** | weather_tool.py | 107-200 | File-based cache with TTL, cache invalidation |
-| **Credential Management** | UserCredentialService | - | Per-user API keys, OAuth tokens |
-| **UUID Cross-Tool Linking** | reminder_tool.py | 805-847 | Linking to contacts, fetching fresh data |
-| | contacts_tool.py | 314-579 | Managing linked entities |
-| **Natural Language Dates** | reminder_tool.py | 849-917 | Parsing "tomorrow", "next week", etc. |
-| **LLM Integration** | web_tool.py | 250-290 | Using LLM for content extraction |
-| **Config Validation** | email_tool.py | 244-341 | Connection testing, auto-discovery of settings |
-| **Batch Operations** | - | - | *Not yet implemented - good opportunity!* |
-| **Rate Limiting** | - | - | *Not yet implemented - good opportunity!* |
+| Pattern | Tool/File | Lines | When You Need It |
+|---------|-----------|-------|------------------|
+| **Batch Operations** | contacts_tool.py | 300-351 | Bulk imports with error tracking |
+| **Gated Tools** | tools/repo.py | 281-298 | Self-determining availability via is_available() |
+| **Tool Dependencies** | tools/repo.py | 212-213, 522-555 | Tools that depend on other tools |
+| **Dependency Injection** | tools/repo.py | 341-382 | LLMProvider, WorkingMemory injection |
+| **Working Memory Integration** | tools/repo.py | 635-662 | Publishing tool hints via trinkets |
+| **Tool Discovery** | tools/repo.py | 557-595 | Auto-discovery from tools/implementations/ |
+| **Natural Language Dates** | reminder_tool.py | 788-852 | Parsing "tomorrow", "in 3 weeks", etc. |
+| **UUID Cross-Tool Linking** | reminder_tool.py | 306-312, 777-784 | Linking reminders to contacts |
+| **Partial Name Matching** | contacts_tool.py | 139-170 | starts-with, then contains matching |
+| **Duplicate Detection** | contacts_tool.py | 246-258 | Case-insensitive duplicate checking |
+| **Config Validation** | tools/repo.py | 57-75 | validate_config() classmethod for connection tests |
+| **Manager Caching** | userdata_manager.py | 451-465 | Per-user UserDataManager caching |
+
+## Architecture Deep Dive
+
+### Tool Base Class (tools/repo.py:40-143)
+
+The `Tool` base class provides automatic user scoping and file operations:
+
+```python
+class Tool(ABC):
+    name = "base_tool"
+    description = "Base class for all tools"
+
+    @property
+    def user_id(self) -> str:
+        """Current user from context."""
+        return get_current_user_id()
+
+    @property
+    def user_data_path(self) -> Path:
+        """User-specific directory for this tool."""
+        user_data = get_user_data_manager(self.user_id)
+        return user_data.get_tool_data_dir(self.name)
+
+    @property
+    def db(self):
+        """Lazy-loaded, user-scoped UserDataManager."""
+        current_user_id = self.user_id
+        if not self._db or self._db.user_id != current_user_id:
+            self._db = get_user_data_manager(current_user_id)
+        return self._db
+
+    # File operations - user-scoped automatically
+    def make_dir(self, path: str) -> Path: ...
+    def get_file_path(self, filename: str) -> Path: ...
+    def open_file(self, filename: str, mode: str = 'r'): ...
+    def file_exists(self, filename: str) -> bool: ...
+```
+
+**Key Points:**
+- **Automatic User Scoping**: `self.db` is always scoped to the current user - no manual filtering needed
+- **Lazy Initialization**: Database connection created on first access
+- **File Isolation**: `self.user_data_path` returns `data/users/{user_id}/tools/{tool_name}/`
+
+### Database Operations (utils/userdata_manager.py)
+
+UserDataManager provides a simple API for SQLite operations with automatic encryption:
+
+```python
+# Create table with schema
+self.db.create_table('my_items', """
+    id TEXT PRIMARY KEY,
+    encrypted__title TEXT NOT NULL,
+    encrypted__notes TEXT,
+    created_at TEXT NOT NULL
+""")
+
+# Create indexes
+self.db.execute("CREATE INDEX IF NOT EXISTS idx_items_date ON my_items(created_at)")
+
+# CRUD operations - encryption is automatic
+self.db.insert('my_items', {
+    'id': item_id,
+    'encrypted__title': 'Secret Title',  # Will be encrypted
+    'created_at': format_utc_iso(utc_now())
+})
+
+items = self.db.select('my_items')  # Returns decrypted data
+# Note: On read, encrypted__ prefix is KEPT in the field name but value is decrypted
+
+self.db.update('my_items',
+    {'encrypted__title': 'New Title'},  # Will be encrypted
+    'id = :id',
+    {'id': item_id}
+)
+
+self.db.delete('my_items', 'id = :id', {'id': item_id})
+```
+
+**Critical Encryption Details (userdata_manager.py:298-330):**
+- Fields prefixed with `encrypted__` are automatically encrypted on write
+- On read, values are automatically decrypted but **the prefix is kept in the field name**
+- Access decrypted values as `item['encrypted__title']`, not `item['title']`
+- Encryption key is derived deterministically from user_id (persistent across sessions)
+
+### Connection Management (userdata_manager.py:45-66)
+
+```python
+@property
+def connection(self) -> sqlite3.Connection:
+    """Lazy persistent connection (thread-safe for cross-thread reuse)."""
+    if self._conn is None:
+        self._conn = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=False  # WAL mode handles concurrency
+        )
+        self._conn.row_factory = sqlite3.Row
+    return self._conn
+```
+
+- **Lazy Creation**: Connection created on first database access
+- **Thread-Safe**: `check_same_thread=False` allows cross-ThreadPoolExecutor usage
+- **Cached Per-User**: `get_user_data_manager()` returns cached instances
+- **Automatic Cleanup**: Connections closed on session collapse via event subscription
 
 ## Development Process
 
@@ -85,7 +184,7 @@ Initial descriptions often use metaphors or analogies. Extract concrete requirem
 Example: "Like 90s pagers"
 Extracted requirements:
 - High urgency messaging only
-- Minimal UI complexity  
+- Minimal UI complexity
 - Respects user attention
 - No feature creep
 ```
@@ -108,17 +207,16 @@ Example: If a spec mentions "no notification fatigue," this implies rate limitin
 
 **Recommended reading order:**
 1. **Start simple**: `reminder_tool.py` - Clean CRUD operations, timezone handling, basic patterns
-2. **Add complexity**: `contacts_tool.py` - Fuzzy search, encryption, UUID linking
-3. **Learn caching**: `weather_tool.py` - API integration, file-based caching, validation
-4. **Go async**: `kasa_tool.py` - Async operations, device management
-5. **Advanced features**: `web_tool.py` - Web operations, LLM extraction
+2. **Add complexity**: `contacts_tool.py` - Fuzzy search, encryption, batch operations
+3. **Learn infrastructure**: `tools/repo.py` - Base class, dependency injection, discovery
+4. **Understand data**: `utils/userdata_manager.py` - Database API, encryption internals
 
 **Infrastructure references:**
 ```python
-tools/repo.py                   # Base Tool class, ToolRepository
-utils/userdata_manager.py       # Database API (self.db operations)
-utils/timezone_utils.py         # utc_now(), format_utc_iso(), etc.
-utils/user_context.py           # get_current_user_id(), get_user_preferences()
+tools/repo.py                   # Base Tool class, ToolRepository, dependency injection
+utils/userdata_manager.py       # Database API (self.db operations), encryption
+utils/timezone_utils.py         # utc_now(), format_utc_iso(), convert_from_utc()
+utils/user_context.py           # get_current_user_id(), get_user_preferences(), has_user_context()
 ```
 
 **Critical:** Deviating from established patterns causes integration issues and maintenance debt. Always check the Pattern Index first.
@@ -126,21 +224,22 @@ utils/user_context.py           # get_current_user_id(), get_user_preferences()
 ### Phase 4: Incremental Implementation
 
 Build order matters:
-1. **Tool structure** - Define class, metadata, schema (see reminder_tool.py:38-96)
-2. **Database schema** - Create tables with indexes (see reminder_tool.py:199-233)
-3. **Basic CRUD** - Add/get/update/delete operations (see contacts_tool.py:201-579)
-4. **Core business logic** - Your domain-specific code
+1. **Tool structure** - Define class, metadata, schema (see reminder_tool.py:38-112)
+2. **Deferred init** - Check has_user_context() before table creation (see reminder_tool.py:114-122)
+3. **Database schema** - Create tables with indexes (see reminder_tool.py:124-145)
+4. **Basic CRUD** - Add/get/update/delete operations (see contacts_tool.py:222-589)
 5. **Advanced features** - Search, export, etc. as needed
 
 **Key implementation principles:**
 
 - **Track progress**: Use TodoWrite to break down complex implementations
-- **Validate inputs**: Collect ALL errors before raising (see weather_tool.py:211-280)
-- **Log before raising**: Always log errors before propagating (see reminder_tool.py:303-335)
-- **Consistent responses**: Use `{"success": bool, "message": str, ...}` format (see reminder_tool.py:805-847)
-- **Timezone everywhere**: Use `utc_now()` and `format_utc_iso()` for all timestamps (see reminder_tool.py:849-917)
-- **Encrypted fields**: Prefix sensitive data with `encrypted__` (see contacts_tool.py:201-260)
-- **Helpful errors**: Include suggestions and available options (see reminder_tool.py:584-614)
+- **Deferred table creation**: Only create tables when user context exists (prevents startup failures)
+- **Validate inputs**: Collect ALL errors before raising (see contacts_tool.py:242-258)
+- **Log before raising**: Always log errors before propagating (see reminder_tool.py:244-252)
+- **Consistent responses**: Use `{"success": bool, "message": str, ...}` format
+- **Timezone everywhere**: Use `utc_now()` and `format_utc_iso()` for all timestamps
+- **Encrypted fields**: Prefix sensitive data with `encrypted__` - access them the same way on read
+- **Helpful errors**: Include suggestions and available options (see reminder_tool.py:501-531)
 
 ### Phase 5: Collaborative Solution Design
 
@@ -246,13 +345,13 @@ Interruptions during tool use contain valuable course corrections:
 
 ```
 [Request interrupted by user for tool use]
-"You're setting the default expiry to 48 hours but that's too long 
+"You're setting the default expiry to 48 hours but that's too long
 for a pager metaphor. These should be ephemeral - 24 hours max."
 ```
 
 This feedback indicates design misalignment. Parse for:
 - Specific parameter corrections
-- Underlying philosophy mismatches  
+- Underlying philosophy mismatches
 - Missing requirements
 
 ## Technical Requirements
@@ -261,7 +360,7 @@ This feedback indicates design misalignment. Parse for:
 
 **Every tool automatically gets user-scoped access via `self.db`** - no manual filtering needed.
 
-**See reminder_tool.py:199-233** for complete database patterns including:
+**See reminder_tool.py:124-145** for complete database patterns including:
 - Table creation with proper schema
 - Encrypted fields (use `encrypted__` prefix)
 - Indexes for performance
@@ -271,7 +370,7 @@ This feedback indicates design misalignment. Parse for:
 
 1. **Automatic User Scoping**: All `self.db` operations are scoped to the current user
 2. **Automatic Encryption**: Fields prefixed with `encrypted__` are encrypted on write, decrypted on read
-3. **Prefix Handling**: On read, the `encrypted__` prefix is automatically stripped from field names
+3. **Prefix Retained on Read**: Access decrypted fields as `item['encrypted__title']` (prefix is kept)
 
 **Example:**
 ```python
@@ -292,10 +391,43 @@ self.db.insert('my_items', {
     'created_at': timestamp
 })
 
-# Select - decryption happens automatically, prefix stripped
+# Select - decryption happens automatically, prefix is KEPT
 items = self.db.select('my_items')
-# Returns: [{'id': '...', 'title': 'Secret Meeting', 'notes': 'Confidential', ...}]
-#          ^^^^ Note: 'title' not 'encrypted__title'
+# Returns: [{'id': '...', 'encrypted__title': 'Secret Meeting', 'encrypted__notes': 'Confidential', ...}]
+#          ^^^^ Note: 'encrypted__title' NOT 'title'
+```
+
+### Deferred Table Creation
+
+Tools should only create tables when user context exists. This prevents startup failures during tool discovery:
+
+```python
+def __init__(self):
+    super().__init__()
+    self.logger = logging.getLogger(__name__)
+
+    # Only create tables if user context is available (not during startup/discovery)
+    from utils.user_context import has_user_context
+    if has_user_context():
+        self._ensure_tables()
+
+def _ensure_tables(self):
+    """Create tables if they don't exist."""
+    schema = """
+        id TEXT PRIMARY KEY,
+        encrypted__data TEXT,
+        created_at TEXT NOT NULL
+    """
+    self.db.create_table('my_data', schema)
+```
+
+Alternatively, ensure tables exist on first use in the `run()` method:
+
+```python
+def run(self, operation: str, **kwargs) -> Dict[str, Any]:
+    # Ensure tables exist on first use
+    self._ensure_tables()
+    # ... rest of operation routing
 ```
 
 ### Credential Storage
@@ -312,10 +444,10 @@ cred_service.store_credential(user_id, 'api_key', 'service_name', key_value)
 
 ### File Operations
 
-**See weather_tool.py:107-200** for cache file management and kasa_tool.py:1214-1232 for JSON config files.
+**See tools/repo.py:118-130** for file operation methods.
 
-Tools get automatic file methods:
-- `self.open_file(filename, mode)` - Open file in tool's directory
+Tools get automatic file methods that are user-scoped:
+- `self.open_file(filename, mode)` - Open file in tool's user directory
 - `self.get_file_path(filename)` - Get full path to file
 - `self.file_exists(filename)` - Check if file exists
 - `self.make_dir(path)` - Create subdirectory
@@ -333,7 +465,7 @@ return {"success": True, "file_path": str(full_path)}
 
 ### Timezone Handling
 
-**See reminder_tool.py:849-917** for natural language date parsing and **punchclock_tool.py:171-176** for display conversion.
+**See reminder_tool.py:788-852** for natural language date parsing and **reminder_tool.py:335-338** for display conversion.
 
 **CRITICAL: Always use UTC internally, convert only for display**
 
@@ -353,8 +485,17 @@ stored_dt = parse_utc_time_string(item['created_at'])
 # Convert to user's timezone ONLY for display
 user_tz = get_user_preferences().timezone
 local_dt = convert_from_utc(stored_dt, user_tz)
-display_string = format_datetime(local_dt, "date_time_short")
+display_string = format_datetime(local_dt, "date_time_short", include_timezone=True)
 ```
+
+**Available timezone utilities (utils/timezone_utils.py):**
+- `utc_now()` - Get current UTC datetime (lines 170-179)
+- `format_utc_iso(dt)` - Format as ISO 8601 string (lines 307-320)
+- `parse_utc_time_string(time_str)` - Parse ISO string to UTC datetime (lines 491-502)
+- `ensure_utc(dt)` - Ensure datetime is UTC-aware (lines 145-167)
+- `convert_from_utc(dt, to_tz)` - Convert UTC to user timezone (lines 225-242)
+- `convert_to_timezone(dt, target_tz)` - Convert between timezones (lines 182-206)
+- `format_relative_time(dt)` - "5 hours ago" format (lines 323-398)
 
 ### Code Organization
 
@@ -376,9 +517,9 @@ tool class with:
 
 ### Tool Registration and Auto-Discovery
 
-**See reminder_tool.py:38-63** and **weather_tool.py:48-104** for configuration examples.
+**See reminder_tool.py:29-35** for configuration examples.
 
-**Auto-Discovery**: Place your tool in `tools/implementations/` and restart MIRA. Done.
+**Auto-Discovery**: Place your tool in `tools/implementations/` and restart MIRA. The ToolRepository automatically scans this package using `pkgutil.iter_modules()` (tools/repo.py:557-595).
 
 **Configuration (Optional)**:
 ```python
@@ -389,33 +530,34 @@ class MyToolConfig(BaseModel):
     enabled: bool = Field(default=True, description="Whether enabled")
     max_items: int = Field(default=10, description="Max items to return")
 
-# Only register if you have custom config beyond 'enabled'
+# Register if you have custom config beyond 'enabled'
 registry.register("my_tool", MyToolConfig)
 ```
 
+If you don't register a config, a default one with just `enabled: bool = True` is auto-created (tools/repo.py:81-97).
+
 ### Tool Descriptions
 
-**See reminder_tool.py:38-96** for complete metadata examples.
+**See reminder_tool.py:48-53** for complete metadata examples.
 
 Two required fields:
-- `simple_description`: Ultra-concise action phrase ("manages reminders")
-- `description`: Detailed explanation with features and use cases
+- `simple_description`: Ultra-concise action phrase (used by invokeother_tool for discovery)
+- `anthropic_schema`: Full schema with `name`, `description`, and `input_schema`
 
 ### Anthropic Schema
 
-**See reminder_tool.py:97-158** for complete schema with operations.
+**See reminder_tool.py:51-112** for complete schema with operations.
 
 **Critical points:**
 - Set `"additionalProperties": false` - prevents unexpected params
 - Use `enum` for fixed options
-- Clear descriptions - Claude uses these
+- Clear descriptions - Claude uses these to understand how to call the tool
 - Mark required fields in `"required"` array
 
-### Database Operations
+### Database Operations Quick Reference
 
-**See reminder_tool.py:199-233** for schema creation and **contacts_tool.py:201-579** for CRUD patterns.
+**See utils/userdata_manager.py:332-405** for full implementation.
 
-**Quick reference:**
 ```python
 # Create table
 schema = """
@@ -433,6 +575,10 @@ self.db.insert('items', {'id': id, 'encrypted__title': title, 'created_at': time
 items = self.db.select('items', 'status = :status', {'status': 'active'})
 self.db.update('items', {'encrypted__title': new_title}, 'id = :id', {'id': id})
 self.db.delete('items', 'id = :id', {'id': id})
+
+# Raw SQL for complex queries
+results = self.db.execute("SELECT * FROM items WHERE created_at > :date", {'date': cutoff})
+single = self.db.fetchone("SELECT * FROM items WHERE id = :id", {'id': id})
 ```
 
 ### Quick Start Template
@@ -442,16 +588,25 @@ Start with this minimal structure, then add patterns from the index as needed:
 ```python
 import logging
 import uuid
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from pydantic import BaseModel, Field
+
 from tools.repo import Tool
+from tools.registry import registry
 from utils.timezone_utils import utc_now, format_utc_iso
 
 logger = logging.getLogger(__name__)
 
+
+class MyToolConfig(BaseModel):
+    enabled: bool = Field(default=True, description="Whether enabled")
+
+registry.register("my_tool", MyToolConfig)
+
+
 class MyTool(Tool):
     name = "my_tool"
     simple_description = "does something useful"
-    description = "Detailed explanation of what this tool does"
 
     anthropic_schema = {
         "name": "my_tool",
@@ -463,6 +618,14 @@ class MyTool(Tool):
                     "type": "string",
                     "enum": ["add", "get", "delete"],
                     "description": "The operation to perform"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Title for the item (required for add)"
+                },
+                "item_id": {
+                    "type": "string",
+                    "description": "ID of item (required for get, delete)"
                 }
             },
             "required": ["operation"],
@@ -473,61 +636,166 @@ class MyTool(Tool):
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger(__name__)
-        self._ensure_tables()
+
+        # Only create tables if user context is available
+        from utils.user_context import has_user_context
+        if has_user_context():
+            self._ensure_tables()
 
     def _ensure_tables(self):
         schema = """
             id TEXT PRIMARY KEY,
-            encrypted__data TEXT,
-            created_at TEXT NOT NULL
+            encrypted__title TEXT NOT NULL,
+            encrypted__notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         """
-        self.db.create_table('my_data', schema)
+        self.db.create_table('my_items', schema)
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_my_items_created ON my_items(created_at)")
 
     def run(self, operation: str, **kwargs) -> Dict[str, Any]:
         try:
+            # Ensure tables exist on first use
+            self._ensure_tables()
+
             if operation == "add":
                 return self._add(**kwargs)
             elif operation == "get":
                 return self._get(**kwargs)
+            elif operation == "delete":
+                return self._delete(**kwargs)
             else:
-                raise ValueError(f"Unknown operation: {operation}")
+                raise ValueError(f"Unknown operation: {operation}. Valid: add, get, delete")
         except Exception as e:
             self.logger.error(f"Error in {operation}: {e}")
             raise
 
-    def _add(self, **kwargs) -> Dict[str, Any]:
-        # Your implementation
-        return {"success": True, "message": "Added"}
+    def _add(self, title: str, notes: Optional[str] = None) -> Dict[str, Any]:
+        if not title:
+            raise ValueError("Title is required")
+
+        item_id = f"item_{uuid.uuid4().hex[:8]}"
+        timestamp = format_utc_iso(utc_now())
+
+        self.db.insert('my_items', {
+            'id': item_id,
+            'encrypted__title': title,
+            'encrypted__notes': notes,
+            'created_at': timestamp,
+            'updated_at': timestamp
+        })
+
+        return {
+            "success": True,
+            "item": {"id": item_id, "encrypted__title": title},
+            "message": f"Created item: {title}"
+        }
+
+    def _get(self, item_id: Optional[str] = None) -> Dict[str, Any]:
+        if item_id:
+            items = self.db.select('my_items', 'id = :id', {'id': item_id})
+            if not items:
+                return {"success": False, "message": f"Item {item_id} not found"}
+            return {"success": True, "item": items[0]}
+        else:
+            items = self.db.select('my_items')
+            return {"success": True, "items": items, "count": len(items)}
+
+    def _delete(self, item_id: str) -> Dict[str, Any]:
+        if not item_id:
+            raise ValueError("item_id is required for delete")
+
+        items = self.db.select('my_items', 'id = :id', {'id': item_id})
+        if not items:
+            return {"success": False, "message": f"Item {item_id} not found"}
+
+        self.db.delete('my_items', 'id = :id', {'id': item_id})
+        return {
+            "success": True,
+            "message": f"Deleted item: {items[0]['encrypted__title']}"
+        }
 ```
 
 ### Error Handling
 
-**See reminder_tool.py:584-614** and **weather_tool.py:211-280** for error patterns.
+**See reminder_tool.py:501-531** for helpful error patterns.
 
 **Key principles:**
 - Always log before raising: `self.logger.error(f"Error: {e}")` then `raise`
 - Use `ValueError` for invalid input, `RuntimeError` for operation failures
 - Provide helpful messages with suggestions
-- Collect all validation errors before raising
+- Show available options when something isn't found
+
+```python
+def _get_item_not_found_error(self, item_id: str) -> str:
+    """Generate helpful error message with available items."""
+    items = self.db.select('my_items')
+
+    error_msg = f"Item '{item_id}' not found."
+
+    if not items:
+        error_msg += " No items available."
+    else:
+        available = [f"  - {i['id']}: {i['encrypted__title']}" for i in items[:5]]
+        error_msg += f"\n\nAvailable items ({len(items)} total):\n"
+        error_msg += "\n".join(available)
+        if len(items) > 5:
+            error_msg += f"\n  ... and {len(items) - 5} more"
+
+    return error_msg
+```
 
 ### Dependency Injection
 
-**See punchclock_tool.py:231-233** for working memory integration.
+**See tools/repo.py:341-382** for how injection works.
 
 Tools can request dependencies in `__init__`:
 ```python
-def __init__(self, working_memory: Optional["WorkingMemory"] = None):
-    super().__init__()
-    self._working_memory = working_memory
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from working_memory.core import WorkingMemory
+
+class MyTool(Tool):
+    def __init__(self, working_memory: Optional["WorkingMemory"] = None):
+        super().__init__()
+        self._working_memory = working_memory
 ```
 
-Supported types: `LLMProvider`, `LLMBridge`, `ToolRepository`, `WorkingMemory`
+ToolRepository automatically injects these when creating instances:
+- `LLMProvider` / `LLMBridge` - For LLM calls
+- `ToolRepository` - For invoking other tools
+- `WorkingMemory` - For publishing trinket updates
 
-ToolRepository automatically injects these when creating instances.
+### Gated Tools
+
+**See tools/repo.py:281-298** for gated tool registration.
+
+Gated tools self-determine their availability via `is_available()` method:
+
+```python
+class MyGatedTool(Tool):
+    name = "my_gated_tool"
+
+    def is_available(self) -> bool:
+        """Check if tool should appear in tool list."""
+        # Example: only available if config file exists
+        return self.file_exists("config.json")
+```
+
+Register as gated in ToolRepository:
+```python
+tool_repo.register_gated_tool("my_gated_tool")
+```
+
+Unlike regular enabled tools, gated tools:
+- Cannot be enabled/disabled via `enable_tool()`/`disable_tool()`
+- Are checked at invocation time via `is_available()`
+- Automatically appear/disappear from tool list based on state
 
 ### Config Validation (Optional)
 
-**See email_tool.py:244-341** for IMAP connection testing and folder auto-discovery.
+**See tools/repo.py:57-75** for the base pattern.
 
 Tools that need custom validation (connection tests, auto-discovery) can override the `validate_config` classmethod. This is called by the `/actions/tools/{tool}/validate` API endpoint.
 
@@ -546,7 +814,6 @@ def validate_config(cls, config: Dict[str, Any]) -> Dict[str, Any]:
     Raises:
         ValueError: If validation fails (e.g., bad credentials, unreachable server)
     """
-    # Example: Test a connection
     server = config.get("server")
     password = config.get("password")
 
@@ -554,7 +821,6 @@ def validate_config(cls, config: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Missing required fields: server, password")
 
     try:
-        # Your connection test logic here
         connection = connect_to_server(server, password)
         discovered_settings = connection.discover()
         return {
@@ -580,6 +846,8 @@ def validate_config(cls, config: Dict[str, Any]) -> Dict[str, Any]:
 | Over-engineering | Complex solution to simple problem | Discuss simpler alternatives |
 | Under-communication | Assumptions instead of questions | Increase dialogue frequency |
 | Misaligned mental models | "That's not quite right" feedback | Deep dive into user's vision |
+| Table creation at startup | Errors during tool discovery | Use `has_user_context()` check |
+| Assuming prefix stripping | Using `item['title']` for encrypted fields | Use `item['encrypted__title']` |
 
 ## Best Practices
 
@@ -588,55 +856,8 @@ def validate_config(cls, config: Dict[str, Any]) -> Dict[str, Any]:
 3. **Embrace iteration**: First implementations reveal hidden requirements
 4. **Respect both perspectives**: Technical elegance without usability fails; user-friendly but broken also fails
 5. **Document decisions**: When choosing between approaches, note why
-
-## Commit Message Format
-
-**Required Structure**: All commits must follow this detailed format with semantic prefixes:
-
-```bash
-# REQUIRED FORMAT - Use literal newlines, never HEREDOC
-git commit -m "prefix: brief summary (50 chars max)
-
-PROBLEM SOLVED:
-Clear description of what issue this commit addresses
-
-ROOT CAUSE: (if applicable)
-Technical explanation of why the problem occurred
-
-SOLUTION:
-Detailed explanation of the approach taken
-
-CHANGES:
-- Bulleted list of specific code changes
-- File modifications, method additions/removals
-- API or interface changes
-
-FUNCTIONALITY PRESERVED: (if applicable)
-- What existing behavior remains unchanged
-- Backward compatibility notes
-
-IMPACT: (choose relevant sections)
-- SECURITY: Security implications
-- PERFORMANCE: Performance impact analysis
-- BREAKING: Breaking changes and migration notes
-- TESTING: Test coverage changes
-
-🤖 Generated with [Claude Code](https://claude.ai/code)
-
-Co-Authored-By: Claude <noreply@anthropic.com>"
-```
-
-**Semantic Prefixes** (use exactly these):
-- `feat:` - New feature or functionality
-- `fix:` - Bug fix or error correction
-- `refactor:` - Code restructuring without functional changes
-- `perf:` - Performance improvements
-- `security:` - Security-related changes
-- `test:` - Adding or modifying tests
-- `docs:` - Documentation updates
-- `chore:` - Maintenance tasks, dependency updates
-- `style:` - Code formatting, whitespace fixes
-- `revert:` - Reverting previous commits
+6. **Defer table creation**: Always check `has_user_context()` before creating tables in `__init__`
+7. **Keep encrypted prefix**: Access decrypted data as `item['encrypted__field']`, not `item['field']`
 
 ## Summary
 

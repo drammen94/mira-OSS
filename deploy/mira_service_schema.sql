@@ -128,7 +128,9 @@ CREATE TABLE IF NOT EXISTS users (
     last_activity_date DATE,
 
     -- LLM tier preference (fast=Haiku, balanced=Sonnet, nuanced=Opus)
-    llm_tier VARCHAR(20) NOT NULL DEFAULT 'balanced' REFERENCES account_tiers(name)
+    llm_tier VARCHAR(20) NOT NULL DEFAULT 'balanced' REFERENCES account_tiers(name),
+    -- Maximum tier this user can access (hierarchical: fast < balanced < nuanced)
+    max_tier VARCHAR(20) NOT NULL DEFAULT 'nuanced' REFERENCES account_tiers(name)
 );
 
 -- Grant SELECT on account_tiers to application user

@@ -46,8 +46,7 @@ class WorkingMemory:
         self._trinkets: Dict[str, object] = {}
         self._current_continuum_id: Optional[str] = None
         self._current_user_id: Optional[str] = None
-        ## @CLAUDE Why are these optional?
-        
+
         # Subscribe to core events
         # System prompt composition request
         self.event_bus.subscribe('ComposeSystemPromptEvent', self._handle_compose_prompt)
@@ -279,24 +278,3 @@ class WorkingMemory:
                 "loaded_at": format_utc_iso(utc_now())
             }
         }
-
-    ## @CLAUDE I see no mentions of this being invoked in the codebase. Dead code?
-    
-    def cleanup_all_trinkets(self) -> None:
-        """
-        Clean up all registered trinkets.
-        
-        Calls cleanup method on each trinket if available.
-        """
-        for trinket_name, trinket in self._trinkets.items():
-            try:
-                if hasattr(trinket, 'cleanup'):
-                    trinket.cleanup()
-                    logger.debug(f"Cleaned up trinket: {trinket_name}")
-            except Exception as e:
-                logger.error(f"Error cleaning up {trinket_name}: {e}")
-        
-        self._trinkets.clear()
-        logger.info("All trinkets cleaned up")
-        
-        ## @CLAUDE This also only appears once. Dead code?
