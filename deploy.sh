@@ -493,6 +493,7 @@ STATUS_MIRA_SERVICE=""
 CONFIG_PROVIDER_NAME=""
 CONFIG_PROVIDER_ENDPOINT=""
 CONFIG_PROVIDER_KEY_PREFIX=""
+CONFIG_PROVIDER_MODEL=""
 STATUS_PROVIDER=""
 
 clear
@@ -810,24 +811,59 @@ else
 
     STATUS_PROVIDER="${CHECKMARK} ${CONFIG_PROVIDER_NAME}"
 
-    # Show model name warning for non-Groq providers
+    # For non-Groq providers, prompt for model name
     if [ "$CONFIG_PROVIDER_NAME" != "Groq" ]; then
         echo ""
-        print_warning "MIRA is configured with Groq-specific model names."
-        print_info "After deployment, you MUST update these model names:"
+        print_info "MIRA needs a model name compatible with ${CONFIG_PROVIDER_NAME}."
         print_info ""
-        print_info "1. Edit /opt/mira/app/config/config.py:"
-        print_info "   - execution_model: \"openai/gpt-oss-20b\" → your model"
-        print_info "   - analysis_model: \"openai/gpt-oss-20b\" → your model"
-        print_info ""
-        print_info "2. Update database tiers (run in psql -d mira_service):"
-        print_info "   UPDATE account_tiers SET model = 'your-model' WHERE name = 'fast';"
-        print_info "   UPDATE account_tiers SET model = 'your-model' WHERE name = 'balanced';"
-        print_info ""
-        print_info "Current Groq model names that need replacement:"
-        print_info "   - openai/gpt-oss-20b"
-        print_info "   - qwen/qwen3-32b"
-        print_info "   - moonshotai/kimi-k2-instruct-0905"
+        # Show provider-specific examples
+        case "$CONFIG_PROVIDER_NAME" in
+            "OpenRouter")
+                print_info "OpenRouter free models (append :free for free tier):"
+                print_info "  - meta-llama/llama-3.3-70b-instruct:free"
+                print_info "  - qwen/qwen-2.5-72b-instruct:free"
+                print_info "  - deepseek/deepseek-chat-v3-0324:free"
+                print_info "  See: https://openrouter.ai/models?q=free"
+                DEFAULT_MODEL="meta-llama/llama-3.3-70b-instruct:free"
+                ;;
+            "Together AI")
+                print_info "Together AI models:"
+                print_info "  - meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"
+                print_info "  - Qwen/Qwen2.5-72B-Instruct-Turbo"
+                print_info "  See: https://docs.together.ai/docs/chat-models"
+                DEFAULT_MODEL="meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"
+                ;;
+            "Fireworks AI")
+                print_info "Fireworks AI models:"
+                print_info "  - accounts/fireworks/models/llama-v3p1-70b-instruct"
+                print_info "  - accounts/fireworks/models/qwen2p5-72b-instruct"
+                print_info "  See: https://fireworks.ai/models"
+                DEFAULT_MODEL="accounts/fireworks/models/llama-v3p1-70b-instruct"
+                ;;
+            "Cerebras")
+                print_info "Cerebras models:"
+                print_info "  - llama-3.3-70b"
+                print_info "  See: https://cerebras.ai/inference"
+                DEFAULT_MODEL="llama-3.3-70b"
+                ;;
+            "SambaNova")
+                print_info "SambaNova models:"
+                print_info "  - Meta-Llama-3.1-70B-Instruct"
+                print_info "  See: https://community.sambanova.ai/docs"
+                DEFAULT_MODEL="Meta-Llama-3.1-70B-Instruct"
+                ;;
+            *)
+                print_info "Enter your provider's model name."
+                DEFAULT_MODEL=""
+                ;;
+        esac
+        echo ""
+        if [ -n "$DEFAULT_MODEL" ]; then
+            read -p "$(echo -e ${CYAN}Model name${RESET}) [default: ${DEFAULT_MODEL}]: " MODEL_INPUT
+            CONFIG_PROVIDER_MODEL="${MODEL_INPUT:-$DEFAULT_MODEL}"
+        else
+            read -p "$(echo -e ${CYAN}Model name${RESET}): " CONFIG_PROVIDER_MODEL
+        fi
         echo ""
     fi
 
@@ -941,6 +977,9 @@ else
     echo -e "  Anthropic Batch: ${STATUS_ANTHROPIC_BATCH}"
     echo -e "  Provider:        ${STATUS_PROVIDER}"
     echo -e "  Provider Key:    ${STATUS_PROVIDER_KEY}"
+    if [ -n "$CONFIG_PROVIDER_MODEL" ]; then
+        echo -e "  Provider Model:  ${CYAN}${CONFIG_PROVIDER_MODEL}${RESET}"
+    fi
     echo -e "  Kagi:            ${STATUS_KAGI}"
 fi
 echo -e "  DB Password:     ${STATUS_DB_PASSWORD}"
@@ -1310,6 +1349,27 @@ if [ "$CONFIG_PROVIDER_NAME" != "Groq" ] && [ -n "$CONFIG_PROVIDER_ENDPOINT" ]; 
         sed -i "s|https://api.groq.com/openai/v1/chat/completions|${CONFIG_PROVIDER_ENDPOINT}|g" /opt/mira/app/deploy/mira_service_schema.sql
     fi
     echo -e "${CHECKMARK}"
+
+    # Patch model names if user specified a model
+    if [ -n "$CONFIG_PROVIDER_MODEL" ]; then
+        echo -ne "${DIM}${ARROW}${RESET} Patching model names (${CONFIG_PROVIDER_MODEL})... "
+        if [ "$OS" = "macos" ]; then
+            # Patch config.py - execution_model and analysis_model
+            sed -i '' "s|execution_model: str = Field(default=\"openai/gpt-oss-20b\"|execution_model: str = Field(default=\"${CONFIG_PROVIDER_MODEL}\"|" /opt/mira/app/config/config.py
+            sed -i '' "s|analysis_model: str = Field(default=\"openai/gpt-oss-20b\"|analysis_model: str = Field(default=\"${CONFIG_PROVIDER_MODEL}\"|" /opt/mira/app/config/config.py
+            # Patch database schema - account_tiers models
+            sed -i '' "s|'qwen/qwen3-32b'|'${CONFIG_PROVIDER_MODEL}'|g" /opt/mira/app/deploy/mira_service_schema.sql
+            sed -i '' "s|'moonshotai/kimi-k2-instruct-0905'|'${CONFIG_PROVIDER_MODEL}'|g" /opt/mira/app/deploy/mira_service_schema.sql
+        else
+            # Patch config.py - execution_model and analysis_model
+            sed -i "s|execution_model: str = Field(default=\"openai/gpt-oss-20b\"|execution_model: str = Field(default=\"${CONFIG_PROVIDER_MODEL}\"|" /opt/mira/app/config/config.py
+            sed -i "s|analysis_model: str = Field(default=\"openai/gpt-oss-20b\"|analysis_model: str = Field(default=\"${CONFIG_PROVIDER_MODEL}\"|" /opt/mira/app/config/config.py
+            # Patch database schema - account_tiers models
+            sed -i "s|'qwen/qwen3-32b'|'${CONFIG_PROVIDER_MODEL}'|g" /opt/mira/app/deploy/mira_service_schema.sql
+            sed -i "s|'moonshotai/kimi-k2-instruct-0905'|'${CONFIG_PROVIDER_MODEL}'|g" /opt/mira/app/deploy/mira_service_schema.sql
+        fi
+        echo -e "${CHECKMARK}"
+    fi
 fi
 
 print_header "Step 4: Python Environment Setup"
@@ -2085,6 +2145,9 @@ else
     echo -e "  Anthropic Batch: ${STATUS_ANTHROPIC_BATCH}"
     echo -e "  Provider:        ${STATUS_PROVIDER}"
     echo -e "  Provider Key:    ${STATUS_PROVIDER_KEY}"
+    if [ -n "$CONFIG_PROVIDER_MODEL" ]; then
+        echo -e "  Provider Model:  ${CYAN}${CONFIG_PROVIDER_MODEL}${RESET}"
+    fi
     echo -e "  Kagi:            ${STATUS_KAGI}"
 
     if [ "${CONFIG_ANTHROPIC_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ] || [ "${CONFIG_PROVIDER_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
