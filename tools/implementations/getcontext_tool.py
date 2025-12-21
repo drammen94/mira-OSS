@@ -106,7 +106,11 @@ Be systematic and thorough."""
         from clients.llm_provider import GenericProviderClient
         from clients.vault_client import get_api_key
 
-        api_key = get_api_key(config.api.execution_api_key_name)
+        # Get API key (None for local providers like Ollama)
+        if config.api.execution_api_key_name:
+            api_key = get_api_key(config.api.execution_api_key_name)
+        else:
+            api_key = None  # Local provider (Ollama) - no API key needed
 
         return GenericProviderClient(
             api_key=api_key,

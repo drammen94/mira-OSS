@@ -230,15 +230,18 @@ class LLMProvider:
         self.api_key = api_key if api_key is not None else config.api_key
         self.enable_prompt_caching = enable_prompt_caching
 
-        # Get execution model API key from Vault
-        try:
-            from clients.vault_client import get_api_key
-            self.execution_api_key = get_api_key(config.api.execution_api_key_name)
-            if not self.execution_api_key:
-                self.logger.warning(f"Execution model API key '{config.api.execution_api_key_name}' not found in Vault - execution model disabled")
-        except Exception as e:
-            self.logger.error(f"Failed to get execution model API key: {e}")
-            self.execution_api_key = None
+        # Get execution model API key from Vault (None for local providers like Ollama)
+        if config.api.execution_api_key_name:
+            try:
+                from clients.vault_client import get_api_key
+                self.execution_api_key = get_api_key(config.api.execution_api_key_name)
+                if not self.execution_api_key:
+                    self.logger.warning(f"Execution model API key '{config.api.execution_api_key_name}' not found in Vault - execution model disabled")
+            except Exception as e:
+                self.logger.error(f"Failed to get execution model API key: {e}")
+                self.execution_api_key = None
+        else:
+            self.execution_api_key = None  # Local provider (Ollama) - no API key needed
 
         # Extended thinking configuration
         self.extended_thinking = config.api_server.extended_thinking

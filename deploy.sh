@@ -1273,21 +1273,28 @@ if [ -n "$CONFIG_PATCH_OLLAMA_MODEL" ] && [ "$CONFIG_PATCH_OLLAMA_MODEL" != "qwe
     echo -e "${CHECKMARK}"
 fi
 
-# Patch analysis endpoint for offline mode (fingerprint generation uses Ollama instead of Groq)
+# Patch config for offline mode (all LLM endpoints use Ollama instead of Groq)
 if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
-    echo -ne "${DIM}${ARROW}${RESET} Patching analysis endpoint for offline mode... "
+    echo -ne "${DIM}${ARROW}${RESET} Patching config for offline mode... "
     OLLAMA_MODEL="${CONFIG_OLLAMA_MODEL:-qwen3:1.7b}"
     if [ "$OS" = "macos" ]; then
-        # Change analysis_endpoint from Groq to Ollama
+        # Patch analysis settings (fingerprint generation, memory evacuation)
         sed -i '' 's|analysis_endpoint: str = Field(default="https://api.groq.com/openai/v1/chat/completions"|analysis_endpoint: str = Field(default="http://localhost:11434/v1/chat/completions"|' /opt/mira/app/config/config.py
-        # Change analysis_api_key_name from "provider_key" to None (Ollama needs no API key)
         sed -i '' 's|analysis_api_key_name: str = Field(default="provider_key"|analysis_api_key_name: Optional[str] = Field(default=None|' /opt/mira/app/config/config.py
-        # Change analysis_model from Groq model to Ollama model
         sed -i '' "s|analysis_model: str = Field(default=\"openai/gpt-oss-20b\"|analysis_model: str = Field(default=\"${OLLAMA_MODEL}\"|" /opt/mira/app/config/config.py
+        # Patch execution settings (dynamic routing for simple tools)
+        sed -i '' 's|execution_endpoint: str = Field(default="https://api.groq.com/openai/v1/chat/completions"|execution_endpoint: str = Field(default="http://localhost:11434/v1/chat/completions"|' /opt/mira/app/config/config.py
+        sed -i '' 's|execution_api_key_name: str = Field(default="provider_key"|execution_api_key_name: Optional[str] = Field(default=None|' /opt/mira/app/config/config.py
+        sed -i '' "s|execution_model: str = Field(default=\"openai/gpt-oss-20b\"|execution_model: str = Field(default=\"${OLLAMA_MODEL}\"|" /opt/mira/app/config/config.py
     else
+        # Patch analysis settings (fingerprint generation, memory evacuation)
         sed -i 's|analysis_endpoint: str = Field(default="https://api.groq.com/openai/v1/chat/completions"|analysis_endpoint: str = Field(default="http://localhost:11434/v1/chat/completions"|' /opt/mira/app/config/config.py
         sed -i 's|analysis_api_key_name: str = Field(default="provider_key"|analysis_api_key_name: Optional[str] = Field(default=None|' /opt/mira/app/config/config.py
         sed -i "s|analysis_model: str = Field(default=\"openai/gpt-oss-20b\"|analysis_model: str = Field(default=\"${OLLAMA_MODEL}\"|" /opt/mira/app/config/config.py
+        # Patch execution settings (dynamic routing for simple tools)
+        sed -i 's|execution_endpoint: str = Field(default="https://api.groq.com/openai/v1/chat/completions"|execution_endpoint: str = Field(default="http://localhost:11434/v1/chat/completions"|' /opt/mira/app/config/config.py
+        sed -i 's|execution_api_key_name: str = Field(default="provider_key"|execution_api_key_name: Optional[str] = Field(default=None|' /opt/mira/app/config/config.py
+        sed -i "s|execution_model: str = Field(default=\"openai/gpt-oss-20b\"|execution_model: str = Field(default=\"${OLLAMA_MODEL}\"|" /opt/mira/app/config/config.py
     fi
     echo -e "${CHECKMARK}"
 fi

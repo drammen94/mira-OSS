@@ -122,7 +122,7 @@ def ensure_single_user(app: FastAPI) -> None:
             try:
                 from clients.vault_client import _ensure_vault_client
                 vault_client = _ensure_vault_client()
-                # Use patch to add mira_api without overwriting anthropic_key/groq_key
+                # Use patch to add mira_api without overwriting anthropic_key/provider_key
                 vault_client.client.secrets.kv.v2.patch(
                     path='mira/api_keys',
                     secret=dict(mira_api=api_key)

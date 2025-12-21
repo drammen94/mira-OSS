@@ -285,9 +285,13 @@ class WebTool(Tool):
         from clients.vault_client import get_api_key
         from clients.llm_provider import LLMProvider
 
-        api_key = get_api_key(config.api.execution_api_key_name)
-        if not api_key:
-            raise RuntimeError(f"API key '{config.api.execution_api_key_name}' not found in Vault")
+        # Get API key (None for local providers like Ollama)
+        if config.api.execution_api_key_name:
+            api_key = get_api_key(config.api.execution_api_key_name)
+            if not api_key:
+                raise RuntimeError(f"API key '{config.api.execution_api_key_name}' not found in Vault")
+        else:
+            api_key = None  # Local provider (Ollama) - no API key needed
 
         # Truncate HTML to prevent context length exceeded errors
         truncated = False

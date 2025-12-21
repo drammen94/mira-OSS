@@ -68,12 +68,15 @@ class MemoryEvacuator:
         with open(user_prompt_path, 'r') as f:
             self.user_prompt_template = f.read()
 
-        # Get API key (reuse fingerprint's analysis key)
-        self.api_key = get_api_key(api_config.analysis_api_key_name)
-        if not self.api_key:
-            raise ValueError(
-                f"API key '{api_config.analysis_api_key_name}' not found in Vault"
-            )
+        # Get API key for LLM endpoint (None for local providers like Ollama)
+        if api_config.analysis_api_key_name:
+            self.api_key = get_api_key(api_config.analysis_api_key_name)
+            if not self.api_key:
+                raise ValueError(
+                    f"API key '{api_config.analysis_api_key_name}' not found in Vault"
+                )
+        else:
+            self.api_key = None  # Local provider (Ollama) - no API key needed
 
         logger.info(
             f"MemoryEvacuator initialized: threshold={self.config.evacuation_trigger_threshold}, "
