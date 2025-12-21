@@ -107,8 +107,8 @@ CREATE TABLE IF NOT EXISTS account_tiers (
 
 -- Seed initial tiers: 2 Groq (fast, balanced) + 1 Anthropic (nuanced)
 INSERT INTO account_tiers (name, model, thinking_budget, description, display_order, provider, endpoint_url, api_key_name) VALUES
-    ('fast', 'qwen/qwen3-32b', 0, 'Qwen3 32B via Groq', 1, 'generic', 'https://api.groq.com/openai/v1/chat/completions', 'groq_key'),
-    ('balanced', 'moonshotai/kimi-k2-instruct-0905', 0, 'Kimi K2 via Groq', 2, 'generic', 'https://api.groq.com/openai/v1/chat/completions', 'groq_key'),
+    ('fast', 'qwen/qwen3-32b', 0, 'Qwen3 32B via Groq', 1, 'generic', 'https://api.groq.com/openai/v1/chat/completions', 'provider_key'),
+    ('balanced', 'moonshotai/kimi-k2-instruct-0905', 0, 'Kimi K2 via Groq', 2, 'generic', 'https://api.groq.com/openai/v1/chat/completions', 'provider_key'),
     ('nuanced', 'claude-opus-4-5-20251101', 8192, 'Opus with nuanced reasoning', 3, 'anthropic', NULL, NULL)
 ON CONFLICT (name) DO NOTHING;
 
@@ -133,7 +133,7 @@ CREATE TABLE IF NOT EXISTS users (
     -- LLM tier preference (fast=Qwen3, balanced=K2, nuanced=Opus)
     llm_tier VARCHAR(20) NOT NULL DEFAULT 'balanced' REFERENCES account_tiers(name),
     -- Maximum tier this user can access (hierarchical: fast < balanced < nuanced)
-    max_tier VARCHAR(20) NOT NULL DEFAULT 'nuanced' REFERENCES account_tiers(name)
+    max_tier VARCHAR(20) NOT NULL DEFAULT 'balanced' REFERENCES account_tiers(name)
 );
 
 -- Grant SELECT on account_tiers to application user

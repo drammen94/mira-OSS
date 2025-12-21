@@ -474,7 +474,7 @@ vault_put_if_not_exists() {
 # Initialize configuration state (using simple variables for Bash 3.x compatibility)
 CONFIG_ANTHROPIC_KEY=""
 CONFIG_ANTHROPIC_BATCH_KEY=""
-CONFIG_GROQ_KEY=""
+CONFIG_PROVIDER_KEY=""
 CONFIG_KAGI_KEY=""
 CONFIG_DB_PASSWORD=""
 CONFIG_INSTALL_PLAYWRIGHT=""
@@ -484,12 +484,16 @@ CONFIG_OFFLINE_MODE=""
 CONFIG_OLLAMA_MODEL=""
 STATUS_ANTHROPIC=""
 STATUS_ANTHROPIC_BATCH=""
-STATUS_GROQ=""
+STATUS_PROVIDER_KEY=""
 STATUS_KAGI=""
 STATUS_DB_PASSWORD=""
 STATUS_PLAYWRIGHT=""
 STATUS_SYSTEMD=""
 STATUS_MIRA_SERVICE=""
+CONFIG_PROVIDER_NAME=""
+CONFIG_PROVIDER_ENDPOINT=""
+CONFIG_PROVIDER_KEY_PREFIX=""
+STATUS_PROVIDER=""
 
 clear
 echo -e "${BOLD}${CYAN}"
@@ -663,11 +667,11 @@ if [[ "$OFFLINE_MODE_INPUT" =~ ^[Yy](es)?$ ]]; then
     # Use placeholder keys so Vault validation passes - these won't actually work
     CONFIG_ANTHROPIC_KEY="OFFLINE_MODE_PLACEHOLDER"
     CONFIG_ANTHROPIC_BATCH_KEY="OFFLINE_MODE_PLACEHOLDER"
-    CONFIG_GROQ_KEY="OFFLINE_MODE_PLACEHOLDER"
+    CONFIG_PROVIDER_KEY="OFFLINE_MODE_PLACEHOLDER"
     CONFIG_KAGI_KEY=""
     STATUS_ANTHROPIC="${DIM}Offline mode${RESET}"
     STATUS_ANTHROPIC_BATCH="${DIM}Offline mode${RESET}"
-    STATUS_GROQ="${DIM}Offline mode${RESET}"
+    STATUS_PROVIDER_KEY="${DIM}Offline mode${RESET}"
     STATUS_KAGI="${DIM}Offline mode${RESET}"
 
     # Ask for model name
@@ -747,34 +751,121 @@ else
         fi
     done
 
-    # Groq API Key (required for online mode)
-    echo -e "${BOLD}${BLUE}2. Groq API Key${RESET} ${DIM}(REQUIRED - console.groq.com/keys)${RESET}"
+    # Generic Provider Selection (for fast inference - OpenAI-compatible)
+    echo -e "${BOLD}${BLUE}2. Generic Provider${RESET} ${DIM}(for fast inference - OpenAI-compatible)${RESET}"
+    echo -e "${DIM}   Select your preferred provider:${RESET}"
+    echo "     1. Groq (default, recommended)"
+    echo "     2. OpenRouter"
+    echo "     3. Together AI"
+    echo "     4. Fireworks AI"
+    echo "     5. Cerebras"
+    echo "     6. SambaNova"
+    echo "     7. Other (custom endpoint)"
+    read -p "$(echo -e ${CYAN}Select provider${RESET}) [1-7, default=1]: " PROVIDER_CHOICE
+
+    # Set provider-specific values based on selection
+    case "${PROVIDER_CHOICE:-1}" in
+        1)
+            CONFIG_PROVIDER_NAME="Groq"
+            CONFIG_PROVIDER_ENDPOINT="https://api.groq.com/openai/v1/chat/completions"
+            CONFIG_PROVIDER_KEY_PREFIX="gsk_"
+            ;;
+        2)
+            CONFIG_PROVIDER_NAME="OpenRouter"
+            CONFIG_PROVIDER_ENDPOINT="https://openrouter.ai/api/v1/chat/completions"
+            CONFIG_PROVIDER_KEY_PREFIX="sk-or-"
+            ;;
+        3)
+            CONFIG_PROVIDER_NAME="Together AI"
+            CONFIG_PROVIDER_ENDPOINT="https://api.together.xyz/v1/chat/completions"
+            CONFIG_PROVIDER_KEY_PREFIX=""
+            ;;
+        4)
+            CONFIG_PROVIDER_NAME="Fireworks AI"
+            CONFIG_PROVIDER_ENDPOINT="https://api.fireworks.ai/inference/v1/chat/completions"
+            CONFIG_PROVIDER_KEY_PREFIX=""
+            ;;
+        5)
+            CONFIG_PROVIDER_NAME="Cerebras"
+            CONFIG_PROVIDER_ENDPOINT="https://api.cerebras.ai/v1/chat/completions"
+            CONFIG_PROVIDER_KEY_PREFIX=""
+            ;;
+        6)
+            CONFIG_PROVIDER_NAME="SambaNova"
+            CONFIG_PROVIDER_ENDPOINT="https://api.sambanova.ai/v1/chat/completions"
+            CONFIG_PROVIDER_KEY_PREFIX=""
+            ;;
+        7)
+            CONFIG_PROVIDER_NAME="Custom"
+            read -p "$(echo -e ${CYAN}Enter custom endpoint URL${RESET}): " CONFIG_PROVIDER_ENDPOINT
+            CONFIG_PROVIDER_KEY_PREFIX=""
+            ;;
+        *)
+            # Invalid selection - default to Groq
+            CONFIG_PROVIDER_NAME="Groq"
+            CONFIG_PROVIDER_ENDPOINT="https://api.groq.com/openai/v1/chat/completions"
+            CONFIG_PROVIDER_KEY_PREFIX="gsk_"
+            ;;
+    esac
+
+    STATUS_PROVIDER="${CHECKMARK} ${CONFIG_PROVIDER_NAME}"
+
+    # Show model name warning for non-Groq providers
+    if [ "$CONFIG_PROVIDER_NAME" != "Groq" ]; then
+        echo ""
+        print_warning "MIRA is configured with Groq-specific model names."
+        print_info "After deployment, you MUST update these model names:"
+        print_info ""
+        print_info "1. Edit /opt/mira/app/config/config.py:"
+        print_info "   - execution_model: \"openai/gpt-oss-20b\" → your model"
+        print_info "   - analysis_model: \"openai/gpt-oss-20b\" → your model"
+        print_info ""
+        print_info "2. Update database tiers (run in psql -d mira_service):"
+        print_info "   UPDATE account_tiers SET model = 'your-model' WHERE name = 'fast';"
+        print_info "   UPDATE account_tiers SET model = 'your-model' WHERE name = 'balanced';"
+        print_info ""
+        print_info "Current Groq model names that need replacement:"
+        print_info "   - openai/gpt-oss-20b"
+        print_info "   - qwen/qwen3-32b"
+        print_info "   - moonshotai/kimi-k2-instruct-0905"
+        echo ""
+    fi
+
+    # Generic Provider API Key (required for online mode)
+    echo -e "${BOLD}${BLUE}2b. ${CONFIG_PROVIDER_NAME} API Key${RESET} ${DIM}(REQUIRED)${RESET}"
     while true; do
         read -p "$(echo -e ${CYAN}Enter key${RESET}) (or Enter to skip): " GROQ_KEY_INPUT
         if [ -z "$GROQ_KEY_INPUT" ]; then
-            CONFIG_GROQ_KEY="PLACEHOLDER_SET_THIS_LATER"
-            STATUS_GROQ="${WARNING} NOT SET - You must configure this before using MIRA"
+            CONFIG_PROVIDER_KEY="PLACEHOLDER_SET_THIS_LATER"
+            STATUS_PROVIDER_KEY="${WARNING} NOT SET - You must configure this before using MIRA"
             break
         fi
-        # Basic validation - check if it looks like a Groq key
-        if [[ $GROQ_KEY_INPUT =~ ^gsk_ ]]; then
-            CONFIG_GROQ_KEY="$GROQ_KEY_INPUT"
-            STATUS_GROQ="${CHECKMARK} Configured"
-            break
-        else
-            print_warning "This doesn't look like a valid Groq API key (should start with 'gsk_')"
-            read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y=yes, n=exit, t=try again): " CONFIRM
-            if [[ "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
-                CONFIG_GROQ_KEY="$GROQ_KEY_INPUT"
-                STATUS_GROQ="${CHECKMARK} Configured (unvalidated)"
+        # Validate key prefix if provider has one
+        if [ -n "$CONFIG_PROVIDER_KEY_PREFIX" ]; then
+            if [[ $GROQ_KEY_INPUT =~ ^${CONFIG_PROVIDER_KEY_PREFIX} ]]; then
+                CONFIG_PROVIDER_KEY="$GROQ_KEY_INPUT"
+                STATUS_PROVIDER_KEY="${CHECKMARK} Configured"
                 break
-            elif [[ "$CONFIRM" =~ ^[Tt](ry)?$ ]]; then
-                continue
             else
-                CONFIG_GROQ_KEY="PLACEHOLDER_SET_THIS_LATER"
-                STATUS_GROQ="${WARNING} NOT SET"
-                break
+                print_warning "This doesn't look like a valid ${CONFIG_PROVIDER_NAME} API key (should start with '${CONFIG_PROVIDER_KEY_PREFIX}')"
+                read -p "$(echo -e ${YELLOW}Continue anyway?${RESET}) (y=yes, n=exit, t=try again): " CONFIRM
+                if [[ "$CONFIRM" =~ ^[Yy](es)?$ ]]; then
+                    CONFIG_PROVIDER_KEY="$GROQ_KEY_INPUT"
+                    STATUS_PROVIDER_KEY="${CHECKMARK} Configured (unvalidated)"
+                    break
+                elif [[ "$CONFIRM" =~ ^[Tt](ry)?$ ]]; then
+                    continue
+                else
+                    CONFIG_PROVIDER_KEY="PLACEHOLDER_SET_THIS_LATER"
+                    STATUS_PROVIDER_KEY="${WARNING} NOT SET"
+                    break
+                fi
             fi
+        else
+            # No key prefix validation for this provider
+            CONFIG_PROVIDER_KEY="$GROQ_KEY_INPUT"
+            STATUS_PROVIDER_KEY="${CHECKMARK} Configured"
+            break
         fi
     done
 
@@ -848,7 +939,8 @@ if [ "$CONFIG_OFFLINE_MODE" = "yes" ]; then
 else
     echo -e "  Anthropic:       ${STATUS_ANTHROPIC}"
     echo -e "  Anthropic Batch: ${STATUS_ANTHROPIC_BATCH}"
-    echo -e "  Groq:            ${STATUS_GROQ}"
+    echo -e "  Provider:        ${STATUS_PROVIDER}"
+    echo -e "  Provider Key:    ${STATUS_PROVIDER_KEY}"
     echo -e "  Kagi:            ${STATUS_KAGI}"
 fi
 echo -e "  DB Password:     ${STATUS_DB_PASSWORD}"
@@ -1177,6 +1269,19 @@ if [ -n "$CONFIG_PATCH_OLLAMA_MODEL" ] && [ "$CONFIG_PATCH_OLLAMA_MODEL" != "qwe
         sed -i '' "s|default=\"qwen3:1.7b\"|default=\"${CONFIG_PATCH_OLLAMA_MODEL}\"|" /opt/mira/app/config/config.py
     else
         sed -i "s|default=\"qwen3:1.7b\"|default=\"${CONFIG_PATCH_OLLAMA_MODEL}\"|" /opt/mira/app/config/config.py
+    fi
+    echo -e "${CHECKMARK}"
+fi
+
+# Patch provider endpoint if not Groq (after files are copied, before database is created)
+if [ "$CONFIG_PROVIDER_NAME" != "Groq" ] && [ -n "$CONFIG_PROVIDER_ENDPOINT" ]; then
+    echo -ne "${DIM}${ARROW}${RESET} Patching provider endpoint (${CONFIG_PROVIDER_NAME})... "
+    if [ "$OS" = "macos" ]; then
+        sed -i '' "s|https://api.groq.com/openai/v1/chat/completions|${CONFIG_PROVIDER_ENDPOINT}|g" /opt/mira/app/config/config.py
+        sed -i '' "s|https://api.groq.com/openai/v1/chat/completions|${CONFIG_PROVIDER_ENDPOINT}|g" /opt/mira/app/deploy/mira_service_schema.sql
+    else
+        sed -i "s|https://api.groq.com/openai/v1/chat/completions|${CONFIG_PROVIDER_ENDPOINT}|g" /opt/mira/app/config/config.py
+        sed -i "s|https://api.groq.com/openai/v1/chat/completions|${CONFIG_PROVIDER_ENDPOINT}|g" /opt/mira/app/deploy/mira_service_schema.sql
     fi
     echo -e "${CHECKMARK}"
 fi
@@ -1668,7 +1773,7 @@ print_header "Step 14: Vault Credential Storage"
 # Build api_keys arguments
 # Note: mira_api token is generated by the server on first startup via ensure_single_user()
 # anthropic_batch_key is for Batch API operations (memory extraction) - may be same as main key
-API_KEYS_ARGS="anthropic_key=\"${CONFIG_ANTHROPIC_KEY}\" anthropic_batch_key=\"${CONFIG_ANTHROPIC_BATCH_KEY}\" groq_key=\"${CONFIG_GROQ_KEY}\""
+API_KEYS_ARGS="anthropic_key=\"${CONFIG_ANTHROPIC_KEY}\" anthropic_batch_key=\"${CONFIG_ANTHROPIC_BATCH_KEY}\" provider_key=\"${CONFIG_PROVIDER_KEY}\""
 if [ -n "$CONFIG_KAGI_KEY" ]; then
     API_KEYS_ARGS="$API_KEYS_ARGS kagi_api_key=\"${CONFIG_KAGI_KEY}\""
 fi
@@ -1952,10 +2057,11 @@ else
     echo -e "${BOLD}${BLUE}API Key Configuration${RESET}"
     echo -e "  Anthropic:       ${STATUS_ANTHROPIC}"
     echo -e "  Anthropic Batch: ${STATUS_ANTHROPIC_BATCH}"
-    echo -e "  Groq:            ${STATUS_GROQ}"
+    echo -e "  Provider:        ${STATUS_PROVIDER}"
+    echo -e "  Provider Key:    ${STATUS_PROVIDER_KEY}"
     echo -e "  Kagi:            ${STATUS_KAGI}"
 
-    if [ "${CONFIG_ANTHROPIC_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ] || [ "${CONFIG_GROQ_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
+    if [ "${CONFIG_ANTHROPIC_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ] || [ "${CONFIG_PROVIDER_KEY}" = "PLACEHOLDER_SET_THIS_LATER" ]; then
         echo ""
         print_warning "Required API keys not configured!"
         print_info "MIRA will not work until you set both API keys."
@@ -1965,7 +2071,7 @@ else
         echo -e "${DIM}    vault kv put secret/mira/api_keys \\\\${RESET}"
         echo -e "${DIM}      anthropic_key=\"sk-ant-your-key\" \\\\${RESET}"
         echo -e "${DIM}      anthropic_batch_key=\"sk-ant-your-key\" \\\\${RESET}"
-        echo -e "${DIM}      groq_key=\"gsk_your-key\" \\\\${RESET}"
+        echo -e "${DIM}      provider_key=\"your-provider-api-key\" \\\\${RESET}"
         echo -e "${DIM}      kagi_api_key=\"your-kagi-key\"${RESET}"
     fi
 fi

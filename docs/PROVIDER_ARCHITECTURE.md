@@ -252,7 +252,7 @@ model: str = "claude-opus-4-5-20251101"
 # Execution model (fast, simple tools)
 execution_model: str = "openai/gpt-oss-20b"
 execution_endpoint: str = "https://api.groq.com/openai/v1/chat/completions"
-execution_api_key_name: str = "groq_key"
+execution_api_key_name: str = "provider_key"
 simple_tools: List[str] = ["reminder_tool", "punchclock_tool", ...]
 
 # Fingerprint/analysis (memory retrieval queries)

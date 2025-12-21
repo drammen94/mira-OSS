@@ -18,7 +18,7 @@ class ApiConfig(BaseModel):
     model: str = Field(default="claude-opus-4-5-20251101", description="Anthropic reasoning model for complex operations")
     execution_model: str = Field(default="openai/gpt-oss-20b", description="Faster model for simple tool operations (dynamic routing)")
     execution_endpoint: str = Field(default="https://api.groq.com/openai/v1/chat/completions", description="OpenAI-compatible endpoint for execution model")
-    execution_api_key_name: str = Field(default="groq_key", description="Vault key name for execution model API key")
+    execution_api_key_name: str = Field(default="provider_key", description="Vault key name for execution model API key")
     simple_tools: List[str] = Field(default=["reminder_tool", "punchclock_tool", "weather_tool", "domaindoc_tool"], description="Tools that don't require reasoning model capabilities")
 
     # API key configuration
@@ -52,7 +52,7 @@ class ApiConfig(BaseModel):
     # Fingerprint generation settings (query expansion for memory retrieval)
     analysis_enabled: bool = Field(default=True, description="Enable fingerprint generation for retrieval")
     analysis_endpoint: str = Field(default="https://api.groq.com/openai/v1/chat/completions", description="OpenAI-compatible endpoint for fingerprint generation")
-    analysis_api_key_name: str = Field(default="groq_key", description="Vault key name for fingerprint API key")
+    analysis_api_key_name: str = Field(default="provider_key", description="Vault key name for fingerprint API key")
     analysis_model: str = Field(default="openai/gpt-oss-20b", description="Fast model for fingerprint generation")
     analysis_max_tokens: int = Field(default=500, description="Maximum tokens for fingerprint response")
     analysis_temperature: float = Field(default=1.0, description="Temperature for fingerprint generation")
