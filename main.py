@@ -197,8 +197,11 @@ async def lifespan(app: FastAPI):
     from cns.infrastructure.continuum_repository import get_continuum_repository
     continuum_repo = get_continuum_repository()
     logger.info("Continuum repository initialized with connection pool")
-    
 
+    # Load internal LLM configs from database (fail-fast at startup)
+    from utils.user_context import load_internal_llm_configs
+    load_internal_llm_configs()
+    logger.info("Internal LLM configs loaded from database")
 
     # Initialize lt_memory factory following MIRA's singleton pattern
     logger.info("Initializing lt_memory factory...")
@@ -497,6 +500,14 @@ def create_app() -> FastAPI:
     app.include_router(actions.router, prefix="/v0/api", tags=["actions"])
     app.include_router(tool_config.router, prefix="/v0/api", tags=["tool_config"])
     app.include_router(federation_api.router, prefix="/v0/api", tags=["federation"])
+
+    # Root endpoint - friendly redirect guidance
+    @app.get("/")
+    async def root():
+        """Guide users to the correct endpoints."""
+        return {
+            "message": "MIRA is running! To interact with MIRA, use /v0/api/chat or the CLI tool. To check system health, query /v0/api/health"
+        }
 
     
     return app
