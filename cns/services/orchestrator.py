@@ -545,8 +545,18 @@ class ContinuumOrchestrator:
             logger.error("Attempted to save blank assistant response - rejecting")
             raise ValueError("Assistant response cannot be blank or empty. This may indicate an API error.")
 
+        # Resolve short memory IDs (8-char) to full UUIDs using surfaced memories
+        # LLM outputs mem_XXXXXXXX format, tag parser extracts 8-char portion
+        short_refs = parsed_tags.get('referenced_memories', [])
+        resolved_refs = []
+        for short_id in short_refs:
+            for mem in surfaced_memories:
+                if match_memory_id(short_id, mem['id']):
+                    resolved_refs.append(mem['id'])
+                    break
+
         assistant_metadata = {
-            "referenced_memories": parsed_tags.get('referenced_memories', []),
+            "referenced_memories": resolved_refs,
             "surfaced_memories": [m['id'] for m in surfaced_memories],
             "pinned_memory_ids": list(pinned_ids)  # 8-char IDs for importance boost
         }
@@ -574,7 +584,7 @@ class ContinuumOrchestrator:
         final_response = clean_response_text
         
         # Update metadata with referenced memories and pinned IDs
-        metadata["referenced_memories"] = parsed_tags.get('referenced_memories', [])
+        metadata["referenced_memories"] = resolved_refs
         metadata["surfaced_memories"] = [m['id'] for m in surfaced_memories]
         metadata["pinned_memory_ids"] = list(pinned_ids)  # 8-char IDs for importance boost
 
