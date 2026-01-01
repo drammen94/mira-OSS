@@ -1510,97 +1510,102 @@ restore_vault_secrets() {
 restore_postgresql_data() {
     local backup_file="${BACKUP_DIR}/postgresql_backup.dump"
     local error_file="${BACKUP_DIR}/pg_restore_errors.log"
+    local script_path="/opt/mira/app/deploy/schema_aware_restore.py"
+    local python_path="/opt/mira/app/venv/bin/python3"
+    local temp_db="mira_restore_temp"
 
     echo -ne "${DIM}${ARROW}${RESET} Restoring PostgreSQL data... "
 
-    if [ ! -f "$backup_file" ]; then
+    # Find backup file: prefer full dump from old_app (has schema+data), fall back to data-only dump
+    local actual_backup=""
+
+    # Look for any mira_backup_*.dump in old_app directory (handles any timestamp)
+    if [ -d "${BACKUP_DIR}/old_app" ]; then
+        actual_backup=$(find "${BACKUP_DIR}/old_app" -maxdepth 1 -name "mira_backup_*.dump" -type f ! -empty 2>/dev/null | head -1)
+    fi
+
+    # Fall back to postgresql_backup.dump if no old_app dump found
+    if [ -z "$actual_backup" ] && [ -f "$backup_file" ]; then
+        actual_backup="$backup_file"
+    fi
+
+    if [ -z "$actual_backup" ] || [ ! -f "$actual_backup" ]; then
         echo -e "${ERROR}"
-        print_error "Backup file not found: $backup_file"
+        print_error "No backup file found"
         return 1
     fi
 
-    local pg_result=0
+    [ "$LOUD_MODE" = true ] && echo -e "\n${DIM}Using backup: $actual_backup${RESET}"
 
-    # Clear system config tables that were populated by schema INSERT statements
-    # This allows pg_restore to insert the backed-up data without primary key conflicts
-    # These tables may have customizations (e.g., offline mode endpoints) that must be preserved
-    if [ "$OS" = "linux" ]; then
-        sudo -u postgres psql -d mira_service -c "DELETE FROM account_tiers; DELETE FROM internal_llm;" > /dev/null 2>&1 || true
-    else
-        psql -U mira_admin -h localhost -d mira_service -c "DELETE FROM account_tiers; DELETE FROM internal_llm;" > /dev/null 2>&1 || true
+    if [ ! -f "$script_path" ]; then
+        echo -e "${ERROR}"
+        print_error "Schema-aware restore script not found: $script_path"
+        return 1
     fi
 
-    # Disable triggers during restore for FK constraint handling
-    if [ "$OS" = "linux" ]; then
-        # Copy backup to temp location - postgres user can't read from backup dir owned by mira_service
-        local temp_dump="/tmp/mira_pg_restore_$$.dump"
-        sudo cp "$backup_file" "$temp_dump"
-        sudo chown postgres:postgres "$temp_dump"
-
-        if [ "$LOUD_MODE" = true ]; then
-            echo ""  # newline for verbose output
-            sudo -u postgres pg_restore -d mira_service \
-                --data-only \
-                --disable-triggers \
-                --single-transaction \
-                --verbose \
-                "$temp_dump" 2>&1
-            pg_result=$?
-        else
-            sudo -u postgres pg_restore -d mira_service \
-                --data-only \
-                --disable-triggers \
-                --single-transaction \
-                "$temp_dump" 2>"$error_file"
-            pg_result=$?
-        fi
-
-        # Clean up temp file
-        sudo rm -f "$temp_dump"
-    else
-        # macOS: Use PGPASSWORD if set, otherwise rely on .pgpass/trust auth
-        local pg_env=""
-        if [ -n "$MIGRATE_DB_PASSWORD" ]; then
-            pg_env="PGPASSWORD=$MIGRATE_DB_PASSWORD"
-        fi
-
-        if [ "$LOUD_MODE" = true ]; then
-            echo ""  # newline for verbose output
-            env $pg_env pg_restore -U mira_admin -h localhost -d mira_service \
-                --data-only \
-                --disable-triggers \
-                --single-transaction \
-                --verbose \
-                "$backup_file" 2>&1
-            pg_result=$?
-        else
-            env $pg_env pg_restore -U mira_admin -h localhost -d mira_service \
-                --data-only \
-                --disable-triggers \
-                --single-transaction \
-                "$backup_file" 2>"$error_file"
-            pg_result=$?
-        fi
+    # Step 1: Create temp database (requires superuser)
+    [ "$LOUD_MODE" = true ] && echo -e "\n${DIM}Creating temporary database...${RESET}"
+    sudo -u postgres psql -c "DROP DATABASE IF EXISTS $temp_db;" > /dev/null 2>&1 || true
+    if ! sudo -u postgres psql -c "CREATE DATABASE $temp_db;" > /dev/null 2>&1; then
+        echo -e "${ERROR}"
+        print_error "Failed to create temporary database"
+        return 1
     fi
 
-    if [ $pg_result -eq 0 ]; then
-        [ "$LOUD_MODE" != true ] && echo -e "${CHECKMARK}"
-    else
-        # pg_restore may return non-zero even on partial success
-        # Check if data was actually restored
-        local user_count
-        if [ "$OS" = "linux" ]; then
-            user_count=$(sudo -u postgres psql -d mira_service -tAc "SELECT COUNT(*) FROM users" 2>/dev/null || echo "0")
-        else
-            user_count=$(PGPASSWORD="$MIGRATE_DB_PASSWORD" psql -U mira_admin -h localhost -d mira_service -tAc "SELECT COUNT(*) FROM users" 2>/dev/null || echo "0")
-        fi
+    # Step 2: Enable vector extension (requires superuser)
+    [ "$LOUD_MODE" = true ] && echo -e "${DIM}Enabling vector extension...${RESET}"
+    sudo -u postgres psql -d "$temp_db" -c "CREATE EXTENSION IF NOT EXISTS vector;" > /dev/null 2>&1 || true
+    sudo -u postgres psql -d "$temp_db" -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";" > /dev/null 2>&1 || true
 
-        if [ "$user_count" -gt 0 ]; then
-            [ "$LOUD_MODE" != true ] && echo -e "${CHECKMARK} ${DIM}(with warnings)${RESET}"
-        else
+    # Step 3: Restore dump to temp database (requires superuser for some operations)
+    [ "$LOUD_MODE" = true ] && echo -e "${DIM}Restoring backup to temporary database...${RESET}"
+    local temp_dump="/tmp/mira_temp_restore.dump"
+    sudo cp "$actual_backup" "$temp_dump"
+    sudo chown postgres:postgres "$temp_dump"
+    sudo -u postgres pg_restore -d "$temp_db" --no-owner --no-privileges "$temp_dump" 2>/dev/null || true
+    sudo rm -f "$temp_dump"
+
+    # Step 4: Run Python schema-aware migration with --skip-temp-db-setup
+    local restore_result=0
+    local restore_args=(
+        "--backup-file" "$actual_backup"
+        "--os-type" "$OS"
+        "--skip-temp-db-setup"
+    )
+
+    # Add loud flag if in verbose mode
+    if [ "$LOUD_MODE" = true ]; then
+        restore_args+=("--loud")
+    fi
+
+    # Pass password via environment variable (more secure than CLI arg - not visible in ps)
+    if [ "$LOUD_MODE" = true ]; then
+        PGPASSWORD="$MIGRATE_DB_PASSWORD" "$python_path" "$script_path" "${restore_args[@]}" 2>&1
+        restore_result=$?
+    else
+        PGPASSWORD="$MIGRATE_DB_PASSWORD" "$python_path" "$script_path" "${restore_args[@]}" 2>"$error_file"
+        restore_result=$?
+    fi
+
+    # Step 5: Clean up temp database
+    [ "$LOUD_MODE" = true ] && echo -e "${DIM}Cleaning up temporary database...${RESET}"
+    sudo -u postgres psql -c "DROP DATABASE IF EXISTS $temp_db;" > /dev/null 2>&1 || true
+
+    case $restore_result in
+        0)
+            [ "$LOUD_MODE" != true ] && echo -e "${CHECKMARK}"
+            ;;
+        2)
+            # Conflict detected - script already printed details
+            [ "$LOUD_MODE" != true ] && echo -e "${ERROR}"
+            print_error "Config table conflict detected during restore"
+            print_info "Re-run migration with --prefer-backup or --prefer-schema to resolve"
+            print_info "Or manually resolve in database after migration completes"
+            return 1
+            ;;
+        *)
             [ "$LOUD_MODE" != true ] && echo -e "${ERROR}"
             print_error "Failed to restore PostgreSQL data"
-            # Always show error details on failure
             if [ -f "$error_file" ] && [ -s "$error_file" ]; then
                 print_info "Error details:"
                 cat "$error_file" | while read line; do
@@ -1608,8 +1613,8 @@ restore_postgresql_data() {
                 done
             fi
             return 1
-        fi
-    fi
+            ;;
+    esac
 
     return 0
 }
